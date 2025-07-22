@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:13
+    container_name: protchain-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: protchain
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  protchainapi:
+    build:
+      context: ./protchain
+      dockerfile: Dockerfile
+    container_name: protchain-api
+    env_file:
+      - ./protchain/.env
+    ports:
+      - "${HTTP_PORT}:${HTTP_PORT}"
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  bioapi:
+    build:
+      context: ./bioapi
+      dockerfile: Dockerfile
+    container_name: bio-api
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    depends_on:
+      - ipfs
+
+  ipfs:
+    image: ipfs/kubo:latest
+    container_name: ipfs
+    ports:
+      - "5001:5001"
+      - "8080:8080"
+    volumes:
+      - ipfs_data:/data/ipfs
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  ipfs_data:
