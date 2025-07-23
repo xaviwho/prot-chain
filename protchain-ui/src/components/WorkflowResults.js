@@ -20,7 +20,7 @@ import {
   LinearProgress,
   Button,
 } from '@mui/material';
-import { ExpandMore } from '@mui/icons-material';
+import { ExpandMore, Download } from '@mui/icons-material';
 import dynamic from 'next/dynamic';
 
 const PDBViewer = dynamic(() => import('./PDBViewer'), { ssr: false });
@@ -46,6 +46,48 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
       setLocalResults(results);
     }
   }, [results]);
+
+  // Download functionality
+  const handleDownloadResults = () => {
+    if (!results) {
+      console.log('No results available for download');
+      return;
+    }
+
+    try {
+      // Create a comprehensive results object
+      const downloadData = {
+        workflow_id: params.id,
+        stage: stage,
+        timestamp: new Date().toISOString(),
+        results: results
+      };
+
+      // Convert to JSON string with proper formatting
+      const jsonString = JSON.stringify(downloadData, null, 2);
+      
+      // Create blob and download link
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      // Create temporary download link
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `workflow-${params.id}-${stage}-results-${new Date().toISOString().split('T')[0]}.json`;
+      
+      // Trigger download
+      document.body.appendChild(link);
+      link.click();
+      
+      // Cleanup
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      console.log('Results downloaded successfully');
+    } catch (error) {
+      console.error('Error downloading results:', error);
+    }
+  };
 
   const renderStructurePreparation = (data) => {
     console.log('Structure preparation data:', data);
@@ -187,6 +229,23 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
               </TableBody>
             </Table>
           </TableContainer>
+          
+          {/* Download Results Button */}
+          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
+            <Button
+              variant="contained"
+              startIcon={<Download />}
+              onClick={handleDownloadResults}
+              sx={{
+                backgroundColor: '#1976d2',
+                '&:hover': {
+                  backgroundColor: '#1565c0'
+                }
+              }}
+            >
+              Download Results
+            </Button>
+          </Box>
         </Paper>
       </Box>
     );
@@ -317,6 +376,23 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
             </AccordionDetails>
           </Accordion>
         ))}
+        
+        {/* Download Results Button */}
+        <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
+          <Button
+            variant="contained"
+            startIcon={<Download />}
+            onClick={handleDownloadResults}
+            sx={{
+              backgroundColor: '#1976d2',
+              '&:hover': {
+                backgroundColor: '#1565c0'
+              }
+            }}
+          >
+            Download Results
+          </Button>
+        </Box>
       </Box>
     );
   };
@@ -528,8 +604,19 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>
               Timestamp: {new Date(data.timestamp).toLocaleString()}
             </Typography>
-            <Button variant="outlined" size="small">
-              Export Results
+            <Button 
+              variant="contained"
+              size="small"
+              startIcon={<Download />}
+              onClick={handleDownloadResults}
+              sx={{
+                backgroundColor: '#1976d2',
+                '&:hover': {
+                  backgroundColor: '#1565c0'
+                }
+              }}
+            >
+              Download Results
             </Button>
           </Box>
         </Paper>

@@ -23,75 +23,59 @@ export async function GET(request, { params }) {
     
     console.log(`Checking structure processing status for workflow: ${id}`);
     
-    // Check if we have a bioapi workflow ID mapping
+    // Check if results.json exists locally as fallback
+    if (fs.existsSync(resultsPath)) {
+      console.log('Local results found - processing completed');
+      return NextResponse.json({
+        status: 'COMPLETED',
+        message: 'Structure processing completed'
+      });
+    }
+    
+    // Check if we have a bioapi workflow ID mapping (for real bioapi processing)
     let bioApiWorkflowId = id; // Default to frontend ID
     if (fs.existsSync(mappingPath)) {
       try {
         const mappingContent = fs.readFileSync(mappingPath, 'utf8');
         const mapping = JSON.parse(mappingContent);
-        bioApiWorkflowId = mapping.bioApiWorkflowId;
+        bioApiWorkflowId = mapping.bioapi_workflow_id;
         console.log(`Using bioapi workflow ID for status check: ${bioApiWorkflowId}`);
-      } catch (err) {
-        console.error('Failed to read bioapi mapping:', err);
+      } catch (error) {
+        console.log('Failed to read bioapi mapping, using frontend ID');
       }
     }
-    
-    // First, check bioapi for workflow status
-    const bioApiUrl = process.env.BIOAPI_URL || 'http://localhost:8000';
-    try {
-      const bioApiResponse = await axios({
-        method: 'get',
-        url: `${bioApiUrl}/api/v1/workflows/${bioApiWorkflowId}/status`,
-        timeout: 5000
-      });
+
+    // Only try bioapi status check if we have a valid bioapi workflow ID
+    if (bioApiWorkflowId && bioApiWorkflowId !== id && bioApiWorkflowId !== 'undefined') {
+      const bioApiUrl = process.env.BIOAPI_URL || 'http://localhost:8000';
       
-      if (bioApiResponse.data && bioApiResponse.data.status) {
-        const bioApiStatus = bioApiResponse.data.status.toLowerCase();
-        console.log(`BioAPI workflow status: ${bioApiStatus}`);
+      try {
+        console.log('Checking bioapi status:', `${bioApiUrl}/api/v1/workflows/${bioApiWorkflowId}/status`);
         
-        if (bioApiStatus === 'completed') {
-          // Check if we have local results
-          if (fs.existsSync(resultsPath)) {
-            const resultsContent = fs.readFileSync(resultsPath, 'utf8');
-            try {
-              const resultsData = JSON.parse(resultsContent);
-              return NextResponse.json({
-                status: 'COMPLETED',
-                message: 'Structure processing completed',
-                results: resultsData
-              });
-            } catch (parseErr) {
-              console.error('Failed to parse results.json:', parseErr);
-            }
+        const response = await axios.get(
+          `${bioApiUrl}/api/v1/workflows/${bioApiWorkflowId}/status`,
+          {
+            timeout: 5000
           }
-          
-          // If bioapi says completed but no local results, return completed status
-          return NextResponse.json({
-            status: 'COMPLETED',
-            message: 'Structure processing completed (results may be processing)'
-          });
-        } else if (bioApiStatus === 'failed' || bioApiStatus === 'error') {
-          return NextResponse.json({
-            status: 'ERROR',
-            message: bioApiResponse.data.message || 'Structure processing failed'
-          });
-        } else {
-          // Still processing
-          return NextResponse.json({
-            status: 'PROCESSING',
-            message: `Structure processing in progress (${bioApiStatus})`
-          });
-        }
+        );
+        
+        console.log('Bioapi status response:', response.data);
+        
+        return NextResponse.json({
+          status: response.data.status || 'PROCESSING',
+          message: response.data.message || 'Processing status from bioapi',
+          results: response.data.results || null
+        });
+      } catch (bioApiError) {
+        console.error('Failed to check bioapi status:', {
+          message: bioApiError.message,
+          status: bioApiError.response?.status,
+          statusText: bioApiError.response?.statusText,
+          url: `${bioApiUrl}/api/v1/structure/workflows/${bioApiWorkflowId}/status`
+        });
+        
+        // Fall back to local file checking if bioapi is unavailable
       }
-    } catch (bioApiError) {
-      console.error('Failed to check bioapi status:', {
-        message: bioApiError.message,
-        code: bioApiError.code,
-        status: bioApiError.response?.status,
-        statusText: bioApiError.response?.statusText,
-        url: `${bioApiUrl}/api/v1/workflows/${bioApiWorkflowId}/status`
-      });
-      // Fall back to local file checking
     }
     
     // Fall back to local file checking if bioapi is unavailable

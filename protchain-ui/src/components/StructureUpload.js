@@ -88,9 +88,27 @@ export default function StructureUpload({ onUploadComplete, workflowId }) {
           console.log('Structure processing status:', statusData);
           
           if (statusData.status === 'COMPLETED') {
-            // Structure processing completed successfully
-            resolve(statusData);
-            return;
+            // Structure processing completed successfully, now fetch the actual results
+            try {
+              console.log('Structure processing completed, fetching results...');
+              const resultsResponse = await fetch(`/api/workflow/${workflowId}/refresh-results`);
+              if (resultsResponse.ok) {
+                const resultsData = await resultsResponse.json();
+                console.log('Successfully fetched results:', resultsData);
+                resolve(resultsData);
+                return;
+              } else {
+                console.error('Failed to fetch results:', resultsResponse.status);
+                // Fall back to status data if results fetch fails
+                resolve(statusData);
+                return;
+              }
+            } catch (resultsErr) {
+              console.error('Error fetching results:', resultsErr);
+              // Fall back to status data if results fetch fails
+              resolve(statusData);
+              return;
+            }
           } else if (statusData.status === 'ERROR') {
             // Structure processing failed
             reject(new Error(statusData.message || 'Structure processing failed'));
