@@ -214,13 +214,29 @@ export default function StructureUpload({ onUploadComplete, workflowId }) {
         <Button
           variant={searchMode ? 'contained' : 'outlined'}
           onClick={() => setSearchMode(true)}
-          sx={{ mr: 1 }}
+          sx={{ 
+            mr: 1,
+            ...(searchMode && {
+              backgroundColor: '#4caf50',
+              '&:hover': {
+                backgroundColor: '#45a049'
+              }
+            })
+          }}
         >
           Search PDB
         </Button>
         <Button
           variant={!searchMode ? 'contained' : 'outlined'}
           onClick={() => setSearchMode(false)}
+          sx={{
+            ...(!searchMode && {
+              backgroundColor: '#4caf50',
+              '&:hover': {
+                backgroundColor: '#45a049'
+              }
+            })
+          }}
         >
           Upload File
         </Button>
@@ -242,6 +258,15 @@ export default function StructureUpload({ onUploadComplete, workflowId }) {
             onClick={handlePdbSearch}
             disabled={uploading || !pdbId.trim()}
             fullWidth
+            sx={{
+              backgroundColor: '#4caf50',
+              '&:hover': {
+                backgroundColor: '#45a049'
+              },
+              '&:disabled': {
+                backgroundColor: '#cccccc'
+              }
+            }}
           >
             {uploading ? (
               <>
@@ -297,6 +322,15 @@ export default function StructureUpload({ onUploadComplete, workflowId }) {
             onClick={handleUpload}
             disabled={!file || uploading}
             fullWidth
+            sx={{
+              backgroundColor: '#4caf50',
+              '&:hover': {
+                backgroundColor: '#45a049'
+              },
+              '&:disabled': {
+                backgroundColor: '#cccccc'
+              }
+            }}
           >
             {uploading ? (
               <>

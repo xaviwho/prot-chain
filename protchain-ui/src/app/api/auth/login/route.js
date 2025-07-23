@@ -33,22 +33,45 @@ function generateToken(userData) {
   const expiryDate = new Date();
   expiryDate.setDate(expiryDate.getDate() + 7); // 7 days expiry
   
-  const tokenData = {
-    sub: userData.email,
+  // Create JWT header
+  const header = {
+    alg: 'HS256',
+    typ: 'JWT'
+  };
+  
+  // Create JWT payload
+  const payload = {
+    user_id: userData.id, // Match the Go backend's expected field name
+    sub: userData.email,  // Keep sub for standard JWT compliance
     name: userData.name,
     exp: Math.floor(expiryDate.getTime() / 1000)
   };
   
-  // Convert to base64
-  const tokenStr = Buffer.from(JSON.stringify(tokenData)).toString('base64');
+  // Convert header and payload to base64
+  const headerBase64 = Buffer.from(JSON.stringify(header))
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+  
+  const payloadBase64 = Buffer.from(JSON.stringify(payload))
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
   
   // Create signature
+  const signatureInput = `${headerBase64}.${payloadBase64}`;
   const signature = crypto
     .createHmac('sha256', process.env.JWT_SECRET || 'development-secret-key')
-    .update(tokenStr)
-    .digest('base64');
+    .update(signatureInput)
+    .digest('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
   
-  return `${tokenStr}.${signature}`;
+  // Return standard JWT format: header.payload.signature
+  return `${headerBase64}.${payloadBase64}.${signature}`;
 }
 
 export async function POST(request) {

@@ -6,116 +6,180 @@ import {
   Container,
   Box,
   Typography,
-  Paper,
   Button,
   TextField,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Grid,
   Card,
   CardContent,
   CardActions,
-  Chip,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
   Alert,
+  IconButton,
 } from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
 import ScienceIcon from '@mui/icons-material/Science';
-import TimelineIcon from '@mui/icons-material/Timeline';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
-
-const workflowTemplates = [
-  {
-    id: 'amyloid_prediction',
-    name: 'Amyloid Prediction',
-    description: 'Predict amyloid-forming regions in proteins',
-    parameters: {
-      max_compounds: {
-        type: 'number',
-        label: 'Max Compounds',
-        default: 1000,
-        description: 'Maximum number of compounds to screen',
-      },
-      thorough_mode: {
-        type: 'boolean',
-        label: 'Thorough Mode',
-        default: true,
-        description: 'Run full molecular dynamics simulation',
-      },
-    },
-  },
-];
 
 export default function WorkflowsPage() {
   const [workflows, setWorkflows] = useState([]);
-  const [showNewWorkflow, setShowNewWorkflow] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState('');
-  const [workflowName, setWorkflowName] = useState('');
-  const [parameters, setParameters] = useState({});
+  const [showNewWorkflowDialog, setShowNewWorkflowDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [workflowToDelete, setWorkflowToDelete] = useState(null);
+  const [newWorkflowName, setNewWorkflowName] = useState('');
   const [error, setError] = useState(null);
+  const [invalidToken, setInvalidToken] = useState(false);
+  
+  const handleLogout = () => {
+    // Clear token from localStorage
+    localStorage.removeItem('token');
+    // Redirect to login page
+    window.location.href = '/';
+  };
+
+  const fetchWorkflows = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      
+      // Validate token format (should be header.payload.signature)
+      if (!token || token.split('.').length !== 3) {
+        console.error('Invalid token format - please log out and log in again');
+        setError('Authentication error - please log out and log in again');
+        setInvalidToken(true);
+        return;
+      }
+
+      const res = await fetch('/api/v1/workflows', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      
+      if (!res.ok) {
+        throw new Error('Failed to fetch workflows');
+      }
+      
+      // Log the raw response for debugging
+      const responseText = await res.text();
+      console.log('Raw API response:', responseText);
+      
+      // Try to parse as JSON
+      let data;
+      try {
+        data = JSON.parse(responseText);
+        console.log('Parsed response data:', data);
+      } catch (jsonError) {
+        console.error('JSON parse error:', jsonError);
+        throw new Error('Invalid response format from server');
+      }
+      
+      // Check if data has the expected structure
+      if (data && typeof data === 'object') {
+        // Handle different response formats
+        if (Array.isArray(data)) {
+          // If the API returns an array directly
+          setWorkflows(data);
+        } else if (data.payload && Array.isArray(data.payload)) {
+          // If the API returns {payload: [...workflows]}
+          setWorkflows(data.payload);
+        } else if (data.data && Array.isArray(data.data)) {
+          // If the API returns {data: [...workflows]}
+          setWorkflows(data.data);
+        } else if (data.workflows && Array.isArray(data.workflows)) {
+          // If the API returns {workflows: [...workflows]}
+          setWorkflows(data.workflows);
+        } else {
+          // If we can't find workflows in any expected location
+          console.error('Unexpected response structure:', data);
+          setWorkflows([]);
+          setError('No workflows data found in server response');
+        }
+      } else {
+        console.error('Invalid response data:', data);
+        setWorkflows([]);
+        setError('Invalid response format from server');
+      }
+    } catch (err) {
+      console.error('Error fetching workflows:', err);
+      setError(err.message);
+    }
+  };
 
   useEffect(() => {
-    const fetchWorkflows = async () => {
-      try {
-        const res = await fetch('/api/workflow/list');
-        const data = await res.json();
-        setWorkflows(data);
-      } catch (err) {
-        console.error('Error fetching workflows:', err);
-      }
-    };
-    
     fetchWorkflows();
-    const interval = setInterval(fetchWorkflows, 10000);
-    return () => clearInterval(interval);
   }, []);
 
   const handleCreateWorkflow = async () => {
     try {
-      if (!workflowName || !selectedTemplate) {
-        throw new Error('Please fill in all required fields');
+      if (!newWorkflowName) {
+        throw new Error('Workflow name is required');
       }
-
-      // Clear any previous errors
       setError(null);
 
-      // Get template config
-      const template = workflowTemplates.find(t => t.id === selectedTemplate);
-      if (!template) {
-        throw new Error('Selected template not found');
+      const token = localStorage.getItem('token');
+      
+      // Validate token format (should be header.payload.signature)
+      if (!token || token.split('.').length !== 3) {
+        setError('Authentication error - please log out and log in again');
+        setInvalidToken(true);
+        return;
       }
-
-      const res = await fetch('/api/workflow/start', {
+      
+      const res = await fetch('/api/v1/workflows', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          name: workflowName,
-          template: selectedTemplate,
-          parameters: parameters
-        }),
+        body: JSON.stringify({ name: newWorkflowName }),
       });
-      
-      const data = await res.json();
+
       if (!res.ok) {
-        throw new Error(data.error || data.detail || 'Failed to create workflow');
+        const data = await res.json();
+        throw new Error(data.message || 'Failed to create workflow');
       }
-      
-      setShowNewWorkflow(false);
-      setWorkflowName('');
-      setSelectedTemplate('');
-      setParameters({});
-      
-      // Redirect to the workflow details page
-      window.location.href = `/workflows/${data.id}`;
+
+      setShowNewWorkflowDialog(false);
+      setNewWorkflowName('');
+      fetchWorkflows(); // Refresh the list
     } catch (err) {
       console.error('Error creating workflow:', err);
+      setError(err.message);
+    }
+  };
+
+  const openDeleteDialog = (workflow) => {
+    setWorkflowToDelete(workflow);
+    setShowDeleteDialog(true);
+  };
+
+  const closeDeleteDialog = () => {
+    setWorkflowToDelete(null);
+    setShowDeleteDialog(false);
+  };
+
+  const handleDeleteWorkflow = async () => {
+    if (!workflowToDelete) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/v1/workflows/${workflowToDelete.id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || 'Failed to delete workflow');
+      }
+
+      setWorkflows(workflows.filter((w) => w.id !== workflowToDelete.id));
+      closeDeleteDialog();
+    } catch (err) {
+      console.error('Error deleting workflow:', err);
       setError(err.message);
     }
   };
@@ -123,18 +187,30 @@ export default function WorkflowsPage() {
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert 
+          severity="error" 
+          sx={{ mb: 3 }} 
+          onClose={() => setError(null)}
+          action={
+            invalidToken && (
+              <Button color="inherit" size="small" onClick={handleLogout}>
+                Re-login
+              </Button>
+            )
+          }
+        >
           {error}
         </Alert>
       )}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 4 }}>
-        <Typography variant="h4" component="h1">
-          Drug Discovery Workflows
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
+        <Typography variant="h4" component="h1" sx={{ color: 'text.primary' }}>
+          My Workflows
         </Typography>
         <Button
           variant="contained"
           color="primary"
-          onClick={() => setShowNewWorkflow(true)}
+          startIcon={<ScienceIcon />}
+          onClick={() => setShowNewWorkflowDialog(true)}
         >
           New Workflow
         </Button>
@@ -144,184 +220,63 @@ export default function WorkflowsPage() {
         {workflows.length > 0 ? (
           workflows.map((workflow) => (
             <Grid item xs={12} md={6} lg={4} key={workflow.id}>
-              <Card sx={{ 
-                height: '100%', 
-                display: 'flex', 
-                flexDirection: 'column',
-                transition: 'transform 0.2s, box-shadow 0.2s',
-                '&:hover': {
-                  transform: 'translateY(-4px)',
-                  boxShadow: '0 8px 16px rgba(0,0,0,0.1)'
-                }
-              }}>
+              <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
                 <CardContent sx={{ flexGrow: 1 }}>
-                  <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold', color: 'primary.main' }}>
-                    {workflow.name || `Workflow ${workflow.id.substring(0, 8)}`}
-                  </Typography>
-                  <Typography color="textSecondary" variant="body2" gutterBottom>
+                  <Typography variant="h6">{workflow.name}</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                     Created: {new Date(workflow.created_at).toLocaleString()}
                   </Typography>
-                  <Typography color="textSecondary" variant="body2" gutterBottom>
-                    ID: {workflow.id.substring(0, 8)}...
-                  </Typography>
-                  <Box sx={{ mt: 2, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                    <Chip
-                      icon={
-                        workflow.stage === 'COMPLETED' ? (
-                          <CheckCircleIcon />
-                        ) : workflow.stage === 'ERROR' ? (
-                          <ErrorIcon />
-                        ) : workflow.stage === 'INITIALIZED' ? (
-                          <ScienceIcon />
-                        ) : (
-                          <TimelineIcon />
-                        )
-                      }
-                      label={workflow.stage}
-                      color={
-                        workflow.stage === 'COMPLETED'
-                          ? 'success'
-                          : workflow.stage === 'ERROR'
-                          ? 'error'
-                          : 'primary'
-                      }
-                      variant={workflow.stage === 'INITIALIZED' ? 'outlined' : 'filled'}
-                    />
-                    
-                    {/* Display progress chips for each stage */}
-                    {workflow.steps && workflow.steps.some(step => step.status === 'completed') && (
-                      <Chip 
-                        size="small" 
-                        label={`${workflow.steps.filter(step => step.status === 'completed').length}/${workflow.steps.length} steps`}
-                        color="info"
-                        variant="outlined"
-                      />
-                    )}
-                  </Box>
                 </CardContent>
-                <CardActions sx={{ justifyContent: 'flex-end', p: 2 }}>
-                  <Link href={`/workflows/${workflow.id}`} passHref style={{ textDecoration: 'none' }}>
-                    <Button 
-                      variant="contained" 
-                      color="primary"
-                      size="small"
-                    >
-                      Open Workflow
-                    </Button>
-                  </Link>
+                <CardActions sx={{ justifyContent: 'space-between' }}>
+                  <Button component={Link} href={`/workflows/${workflow.id}`} size="small">
+                    Open
+                  </Button>
+                  <IconButton onClick={() => openDeleteDialog(workflow)} size="small" aria-label="delete">
+                    <DeleteIcon />
+                  </IconButton>
                 </CardActions>
               </Card>
             </Grid>
           ))
         ) : (
-          <Grid item xs={12}>
-            <Paper sx={{ p: 4, textAlign: 'center' }}>
-              <Typography variant="h6" color="textSecondary" gutterBottom>
-                No workflows found
-              </Typography>
-              <Typography variant="body2" color="textSecondary" gutterBottom>
-                Create a new workflow to get started with your drug discovery project
-              </Typography>
-              <Button 
-                variant="contained" 
-                color="primary" 
-                sx={{ mt: 2 }}
-                onClick={() => setShowNewWorkflow(true)}
-              >
-                Create First Workflow
-              </Button>
-            </Paper>
-          </Grid>
+          <Typography sx={{ ml: 2, mt: 2 }}>No workflows found. Create one to get started.</Typography>
         )}
       </Grid>
 
-      <Dialog
-        open={showNewWorkflow}
-        onClose={() => setShowNewWorkflow(false)}
-        maxWidth="sm"
-        fullWidth
-      >
+      {/* New Workflow Dialog */}
+      <Dialog open={showNewWorkflowDialog} onClose={() => setShowNewWorkflowDialog(false)} fullWidth maxWidth="sm">
         <DialogTitle>Create New Workflow</DialogTitle>
         <DialogContent>
-          <Box sx={{ mt: 2 }}>
-            <TextField
-              fullWidth
-              label="Workflow Name"
-              type="text"
-              value={workflowName}
-              onChange={(e) => setWorkflowName(e.target.value)}
-              margin="normal"
-            />
-            <FormControl fullWidth margin="normal">
-              <InputLabel>Template</InputLabel>
-              <Select
-                value={selectedTemplate}
-                onChange={(e) => {
-                  setSelectedTemplate(e.target.value);
-                  const template = workflowTemplates.find(
-                    (t) => t.id === e.target.value
-                  );
-                  if (template) {
-                    const defaultParams = {};
-                    Object.entries(template.parameters).forEach(
-                      ([key, param]) => {
-                        defaultParams[key] = param.default;
-                      }
-                    );
-                    setParameters(defaultParams);
-                  }
-                }}
-              >
-                {workflowTemplates.map((template) => (
-                  <MenuItem key={template.id} value={template.id}>
-                    {template.name}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-
-            {selectedTemplate && (
-              <Box sx={{ mt: 3 }}>
-                <Typography variant="h6" gutterBottom>
-                  Parameters
-                </Typography>
-                {Object.entries(
-                  workflowTemplates.find((t) => t.id === selectedTemplate)
-                    .parameters
-                ).map(([key, param]) => (
-                  <TextField
-                    key={key}
-                    fullWidth
-                    label={param.label}
-                    type={param.type === 'number' ? 'number' : 'text'}
-                    value={parameters[key]}
-                    onChange={(e) =>
-                      setParameters({
-                        ...parameters,
-                        [key]: param.type === 'number'
-                          ? Number(e.target.value)
-                          : param.type === 'boolean'
-                          ? e.target.value === 'true'
-                          : e.target.value,
-                      })
-                    }
-                    helperText={param.description}
-                    margin="normal"
-                  />
-                ))}
-              </Box>
-            )}
-          </Box>
+          <TextField
+            autoFocus
+            margin="dense"
+            id="name"
+            label="Workflow Name"
+            type="text"
+            fullWidth
+            variant="outlined"
+            value={newWorkflowName}
+            onChange={(e) => setNewWorkflowName(e.target.value)}
+            sx={{ mt: 1 }}
+          />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowNewWorkflow(false)}>Cancel</Button>
-          <Button
-            onClick={handleCreateWorkflow}
-            color="primary"
-            disabled={!workflowName || !selectedTemplate}
-          >
-            Create Workflow
-          </Button>
+          <Button onClick={() => setShowNewWorkflowDialog(false)}>Cancel</Button>
+          <Button onClick={handleCreateWorkflow} variant="contained">Create</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={showDeleteDialog} onClose={closeDeleteDialog} fullWidth maxWidth="xs">
+        <DialogTitle>Delete Workflow?</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete the workflow "{workflowToDelete?.name}"? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeDeleteDialog}>Cancel</Button>
+          <Button onClick={handleDeleteWorkflow} color="error" variant="contained">Delete</Button>
         </DialogActions>
       </Dialog>
     </Container>

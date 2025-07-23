@@ -27,7 +27,8 @@ function generateToken(userData) {
   expiryDate.setDate(expiryDate.getDate() + 7); // 7 days expiry
   
   const tokenData = {
-    sub: userData.email,
+    user_id: userData.id, // Match the Go backend's expected field name
+    sub: userData.email,  // Keep sub for standard JWT compliance
     name: userData.name,
     exp: Math.floor(expiryDate.getTime() / 1000)
   };

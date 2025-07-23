@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
 import { getWorkflowPath, getWorkflowFilePath } from '../../../../../utils/pathUtils';
 
 /**
@@ -18,8 +19,83 @@ export async function GET(request, { params }) {
     const inputPdbPath = getWorkflowFilePath(id, 'input.pdb');
     const processedPdbPath = getWorkflowFilePath(id, 'processed.pdb');
     const resultsPath = getWorkflowFilePath(id, 'results.json');
+    const mappingPath = path.join(workflowDir, 'bioapi-mapping.json');
     
     console.log(`Checking structure processing status for workflow: ${id}`);
+    
+    // Check if we have a bioapi workflow ID mapping
+    let bioApiWorkflowId = id; // Default to frontend ID
+    if (fs.existsSync(mappingPath)) {
+      try {
+        const mappingContent = fs.readFileSync(mappingPath, 'utf8');
+        const mapping = JSON.parse(mappingContent);
+        bioApiWorkflowId = mapping.bioApiWorkflowId;
+        console.log(`Using bioapi workflow ID for status check: ${bioApiWorkflowId}`);
+      } catch (err) {
+        console.error('Failed to read bioapi mapping:', err);
+      }
+    }
+    
+    // First, check bioapi for workflow status
+    const bioApiUrl = process.env.BIOAPI_URL || 'http://localhost:8000';
+    try {
+      const bioApiResponse = await axios({
+        method: 'get',
+        url: `${bioApiUrl}/api/v1/workflows/${bioApiWorkflowId}/status`,
+        timeout: 5000
+      });
+      
+      if (bioApiResponse.data && bioApiResponse.data.status) {
+        const bioApiStatus = bioApiResponse.data.status.toLowerCase();
+        console.log(`BioAPI workflow status: ${bioApiStatus}`);
+        
+        if (bioApiStatus === 'completed') {
+          // Check if we have local results
+          if (fs.existsSync(resultsPath)) {
+            const resultsContent = fs.readFileSync(resultsPath, 'utf8');
+            try {
+              const resultsData = JSON.parse(resultsContent);
+              return NextResponse.json({
+                status: 'COMPLETED',
+                message: 'Structure processing completed',
+                results: resultsData
+              });
+            } catch (parseErr) {
+              console.error('Failed to parse results.json:', parseErr);
+            }
+          }
+          
+          // If bioapi says completed but no local results, return completed status
+          return NextResponse.json({
+            status: 'COMPLETED',
+            message: 'Structure processing completed (results may be processing)'
+          });
+        } else if (bioApiStatus === 'failed' || bioApiStatus === 'error') {
+          return NextResponse.json({
+            status: 'ERROR',
+            message: bioApiResponse.data.message || 'Structure processing failed'
+          });
+        } else {
+          // Still processing
+          return NextResponse.json({
+            status: 'PROCESSING',
+            message: `Structure processing in progress (${bioApiStatus})`
+          });
+        }
+      }
+    } catch (bioApiError) {
+      console.error('Failed to check bioapi status:', {
+        message: bioApiError.message,
+        code: bioApiError.code,
+        status: bioApiError.response?.status,
+        statusText: bioApiError.response?.statusText,
+        url: `${bioApiUrl}/api/v1/workflows/${bioApiWorkflowId}/status`
+      });
+      // Fall back to local file checking
+    }
+    
+    // Fall back to local file checking if bioapi is unavailable
+    console.log('Falling back to local file status checking');
     
     // Check if input file exists and get its size
     let inputFileSize = 0;

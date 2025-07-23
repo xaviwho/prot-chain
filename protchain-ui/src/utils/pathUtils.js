@@ -37,7 +37,11 @@ export function joinPaths(...segments) {
  * @returns {string} - Base path for workflow operations
  */
 export function getWorkflowBasePath() {
-  const basePath = process.env.WORKFLOW_BASE_PATH || 'C:\\Users\\NSL\\Downloads\\prot-chain';
+  // Default to the 'uploads' directory at the monorepo root.
+  // process.cwd() in a Next.js app is the project root (e.g., /path/to/protchain-ui).
+  // We navigate up one level to the monorepo root, then into 'uploads'.
+  const defaultPath = path.join(process.cwd(), '..', 'uploads');
+  const basePath = process.env.WORKFLOW_BASE_PATH || defaultPath;
   return normalizePath(basePath);
 }
 
@@ -48,7 +52,7 @@ export function getWorkflowBasePath() {
  * @returns {string} - Full path to the workflow directory
  */
 export function getWorkflowPath(workflowId) {
-  return joinPaths(getWorkflowBasePath(), 'uploads', workflowId);
+  return joinPaths(getWorkflowBasePath(), workflowId);
 }
 
 /**

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import cuid from 'cuid';
 import Cookies from 'js-cookie';
+import { getValidToken, isValidJWT, clearAllTokens } from './tokenUtils';
 
 // Define default URLs based on environment
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -22,17 +23,25 @@ export const getIpfsApiUrl = () => IPFS_API_URL;
 export const getIpfsGatewayUrl = () => IPFS_GATEWAY_URL;
 
 apiClient.interceptors.request.use((config) => {
-    const token = Cookies.get('token');
+    // Use our utility function to get a valid token
+    const token = getValidToken();
+    
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
+    } else {
+        // Only log if we're in the browser to avoid SSR warnings
+        if (typeof window !== 'undefined') {
+            console.debug('No valid token found for API request');
+        }
     }
+    
     return config;
 });
 
 export const authenticateUser = async (email, password) => {
     try {
-        // Use the Next.js API route instead of direct API call
-        const response = await fetch('/api/auth/login', {
+        // Call the backend API directly
+        const response = await fetch('/auth/login', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -40,11 +49,24 @@ export const authenticateUser = async (email, password) => {
             body: JSON.stringify({ email, password })
         });
         
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || 'Authentication failed');
+        }
+        
         const data = await response.json();
         
         if (data.payload?.token) {
+            // Validate token format before storing
+            if (!isValidJWT(data.payload.token)) {
+                console.error('Invalid JWT format received from server');
+                throw new Error('Invalid token format received from server');
+            }
+            
+            // Store token in both localStorage and cookies for compatibility
+            localStorage.setItem('token', data.payload.token);
             Cookies.set('token', data.payload.token, { 
-                expires: 1000, // 1000 days
+                expires: 7, // 7 days
                 secure: process.env.NODE_ENV === 'production',
                 sameSite: 'Lax'
             });
@@ -54,14 +76,14 @@ export const authenticateUser = async (email, password) => {
         return data;
     } catch (error) {
         console.error("Login error:", error);
-        throw new Error('Network Error');
+        throw error; // Pass through the actual error message
     }
 };
 
 export const registerUser = async (name, email, password) => {
     try {
-        // Use the Next.js API route instead of direct API call
-        const response = await fetch('/api/auth/register', {
+        // Call the backend API directly
+        const response = await fetch('/auth/register', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -69,11 +91,24 @@ export const registerUser = async (name, email, password) => {
             body: JSON.stringify({ name, email, password })
         });
         
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || 'Registration failed');
+        }
+        
         const data = await response.json();
         
         if (data.payload?.token) {
+            // Validate token format before storing
+            if (!isValidJWT(data.payload.token)) {
+                console.error('Invalid JWT format received from server');
+                throw new Error('Invalid token format received from server');
+            }
+            
+            // Store token in both localStorage and cookies for compatibility
+            localStorage.setItem('token', data.payload.token);
             Cookies.set('token', data.payload.token, { 
-                expires: 1000, // 1000 days
+                expires: 7, // 7 days
                 secure: process.env.NODE_ENV === 'production',
                 sameSite: 'Lax'
             });
@@ -83,12 +118,14 @@ export const registerUser = async (name, email, password) => {
         return data;
     } catch (error) {
         console.error("Registration error:", error);
-        throw new Error('Network Error');
+        throw error; // Pass through the actual error message
     }
 };
 
 export const logoutUser = () => {
-    Cookies.remove('token');
+    // Use the utility function to clear tokens from all storages
+    clearAllTokens();
+    
     // Trigger storage event for Navigation component
     window.dispatchEvent(new Event('storage'));
     window.location.href = '/login';
