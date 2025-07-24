@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import {
   Box,
@@ -21,12 +21,8 @@ import {
   Button,
   CircularProgress,
 } from '@mui/material';
-import { ExpandMore, Download } from '@mui/icons-material';
-import dynamic from 'next/dynamic';
-
-const PDBViewer = dynamic(() => import('./PDBViewer'), { ssr: false });
-const BindingSiteViewer = dynamic(() => import('./BindingSiteViewer'), { ssr: false });
-const BindingSite3DViewer = dynamic(() => import('./BindingSite3DViewer'), { ssr: false });
+import { ExpandMore, Download, HourglassEmpty, ErrorOutline } from '@mui/icons-material';
+import { saveAs } from 'file-saver';
 
 function TabPanel({ children, value, index }) {
   return (
@@ -36,15 +32,24 @@ function TabPanel({ children, value, index }) {
   );
 }
 
-export default function WorkflowResults({ results, stage, activeTab = 0 }) {
-  const [blockchainCommitted, setBlockchainCommitted] = useState(false);
-  const [ipfsHash, setIpfsHash] = useState(null);
-  const [blockchainTxHash, setBlockchainTxHash] = useState(null);
+function WorkflowResults({ results, stage, activeTab = 0, workflow = null }) {
+  // Initialize blockchain state from persisted workflow data
+  const blockchainData = workflow?.blockchain || {};
+  const [blockchainCommitted, setBlockchainCommitted] = useState(!!blockchainData.transactionHash);
+  const [ipfsHash, setIpfsHash] = useState(blockchainData.ipfsHash || null);
+  const [blockchainTxHash, setBlockchainTxHash] = useState(blockchainData.transactionHash || null);
   const [commitLoading, setCommitLoading] = useState(false);
   const [verifyLoading, setVerifyLoading] = useState(false);
-  const [verificationResult, setVerificationResult] = useState(null);
+  const [verificationResult, setVerificationResult] = useState(blockchainData.verified ? blockchainData.verificationData : null);
   const [currentTab, setCurrentTab] = useState(activeTab);
   const params = useParams();
+  
+  console.log('🔗 WorkflowResults blockchain initialization:');
+  console.log('  - workflow.blockchain:', blockchainData);
+  console.log('  - blockchainCommitted:', blockchainCommitted);
+  console.log('  - ipfsHash:', ipfsHash);
+  console.log('  - blockchainTxHash:', blockchainTxHash);
+  console.log('  - verificationResult:', verificationResult);
 
   console.log('🔍 WorkflowResults component received:');
   console.log('  - results:', JSON.stringify(results, null, 2));
@@ -53,6 +58,81 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
   console.log('  - results type:', typeof results);
   console.log('  - results is null?', results === null);
   console.log('  - results is undefined?', results === undefined);
+
+  // Initialize 3Dmol.js viewer for protein structure visualization
+  useEffect(() => {
+    if (stage !== 'binding_site_analysis' && stage !== 'completed') return;
+    if (!results?.binding_sites && !results?.binding_site_analysis?.binding_sites) return;
+
+    const scriptId = '3dmol-script';
+    let script = document.getElementById(scriptId);
+    if (!script) {
+        script = document.createElement('script');
+        script.id = scriptId;
+        script.src = 'https://3dmol.csb.pitt.edu/build/3Dmol-min.js';
+        script.async = true;
+        document.head.appendChild(script);
+    }
+
+    const initializeViewer = () => {
+        const viewerElement = document.getElementById(`molviewer-${params.id}`);
+        if (!viewerElement || typeof window.$3Dmol === 'undefined') {
+            setTimeout(initializeViewer, 250);
+            return;
+        }
+
+        if (viewerRef.current) {
+            viewerRef.current.clear();
+        }
+        viewerElement.innerHTML = '';
+
+        const loadingOverlay = viewerElement.parentElement?.querySelector('[data-loading-overlay]');
+        if (loadingOverlay) loadingOverlay.style.display = 'flex';
+
+        fetch(`/api/workflows/${params.id}/pdb`)
+            .then(response => {
+                if (!response.ok) throw new Error(`Failed to fetch PDB file: ${response.statusText}`);
+                return response.text();
+            })
+            .then(pdbData => {
+                if (!pdbData || !pdbData.trim().startsWith('HEADER')) throw new Error('Invalid or empty PDB data received.');
+                
+                const viewer = window.$3Dmol.createViewer(viewerElement, { backgroundColor: 'black' });
+                viewer.addModel(pdbData, 'pdb');
+                viewer.setStyle({}, { cartoon: { color: 'spectrum' } });
+
+                const bindingSites = results?.binding_site_analysis?.binding_sites || results?.binding_sites || [];
+                if (bindingSites.length > 0) {
+                    bindingSites.forEach(site => {
+                        const residueIds = site.residues.map(r => parseInt(r.split(' ')[1])).filter(id => !isNaN(id));
+                        if (residueIds.length > 0) {
+                            viewer.addStyle({resi: residueIds}, {sphere: {color: 'red', radius: 0.7, alpha: 0.9}});
+                        }
+                    });
+                }
+
+                viewer.zoomTo();
+                viewer.render();
+                viewerRef.current = viewer;
+                if (loadingOverlay) setTimeout(() => { loadingOverlay.style.display = 'none'; }, 100);
+            })
+            .catch(error => {
+                console.error('Error initializing 3D viewer:', error);
+                if (viewerElement) {
+                    viewerElement.innerHTML = `<div style="padding: 20px; text-align: center; color: #ff8a80;"><strong>Error:</strong> ${error.message}</div>`;
+                }
+                if (loadingOverlay) loadingOverlay.style.display = 'none';
+            });
+    };
+
+    if (window.$3Dmol) {
+        initializeViewer();
+    } else {
+        script.onload = initializeViewer;
+        script.onerror = () => console.error('Failed to load 3Dmol.js script.');
+    }
+
+  }, [stage, results, params.id]);
 
   const commitToBlockchain = async () => {
     if (!results || !params.id) return;
@@ -101,6 +181,17 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
       const blockchainData = await blockchainResponse.json();
       setBlockchainTxHash(blockchainData.transactionHash);
       setBlockchainCommitted(true);
+      
+      // Store commit info in localStorage for immediate display in WorkflowStages
+      const recentCommits = JSON.parse(localStorage.getItem('recentBlockchainCommits') || '{}');
+      recentCommits[params.id] = {
+        txHash: blockchainData.transactionHash,
+        ipfsHash: ipfsData.hash,
+        timestamp: new Date().toISOString()
+      };
+      localStorage.setItem('recentBlockchainCommits', JSON.stringify(recentCommits));
+      
+      console.log('Stored blockchain commit info in localStorage:', recentCommits[params.id]);
     } catch (error) {
       console.error('Error committing to blockchain:', error);
       alert('Failed to commit results to blockchain: ' + error.message);
@@ -152,37 +243,91 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
     }
 
     try {
-      // Extract structure data based on stage
-      let structureData = {};
-      if (stage === 'structure_preparation' && results.details?.descriptors) {
-        structureData = results.details.descriptors;
-      } else if (results.STRUCTURE_PREPARATION?.descriptors) {
-        structureData = results.STRUCTURE_PREPARATION.descriptors;
-      } else if (results.structure_preparation?.descriptors) {
-        structureData = results.structure_preparation.descriptors;
+      let csvContent = '';
+      
+      if (stage === 'binding_site_analysis') {
+        // Handle binding site analysis results
+        const bindingSites = results.binding_sites || results.binding_site_analysis?.binding_sites || [];
+        
+        if (bindingSites.length === 0) {
+          console.log('No binding sites found for export');
+          alert('No binding site data available for export');
+          return;
+        }
+        
+        // Create CSV header for binding sites
+        const csvHeader = 'Site ID,Score,Volume (Å³),Druggability,Hydrophobicity,Center X,Center Y,Center Z,Residue Count\n';
+        
+        // Create CSV rows for each binding site
+        const csvRows = bindingSites.map(site => {
+          const centerId = site.center || {};
+          return [
+            site.id || 'N/A',
+            (site.score || 0).toFixed(3),
+            (site.volume || 0).toFixed(2),
+            (site.druggability || 0).toFixed(3),
+            (site.hydrophobicity || 0).toFixed(3),
+            (centerId.x || 0).toFixed(2),
+            (centerId.y || 0).toFixed(2),
+            (centerId.z || 0).toFixed(2),
+            (site.residues?.length || 0)
+          ].map(val => `"${val}"`).join(',');
+        }).join('\n');
+        
+        // Add metadata header
+        const metadata = [
+          `"Workflow ID","${params.id}"`,
+          `"Analysis Stage","Binding Site Analysis"`,
+          `"Generated On","${new Date().toISOString()}"`,
+          `"Status","${results.status || 'Completed'}"`,
+          `"Method","${results.method || results.binding_site_analysis?.method || 'fpocket'}"`,
+          `"Total Binding Sites","${bindingSites.length}"`,
+          '',  // Empty line separator
+          '"Binding Site Analysis Results"',
+          csvHeader.trim()
+        ].join('\n');
+        
+        csvContent = metadata + '\n' + csvRows;
+        
+      } else {
+        // Handle structure preparation results (existing logic)
+        let structureData = {};
+        if (stage === 'structure_preparation' && results.details?.descriptors) {
+          structureData = results.details.descriptors;
+        } else if (results.STRUCTURE_PREPARATION?.descriptors) {
+          structureData = results.STRUCTURE_PREPARATION.descriptors;
+        } else if (results.structure_preparation?.descriptors) {
+          structureData = results.structure_preparation.descriptors;
+        }
+        
+        if (Object.keys(structureData).length === 0) {
+          console.log('No structure data found for export');
+          alert('No structure data available for export');
+          return;
+        }
+
+        // Create CSV content for structure data
+        const csvHeader = 'Property,Value\n';
+        const csvRows = Object.entries(structureData).map(([key, value]) => {
+          const propertyName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+          const propertyValue = typeof value === 'boolean' ? (value ? 'Yes' : 'No') : 
+                              (typeof value === 'number' ? value.toFixed(2) : value);
+          return `"${propertyName}","${propertyValue}"`;
+        }).join('\n');
+
+        // Add metadata header
+        const metadata = [
+          `"Workflow ID","${params.id}"`,
+          `"Analysis Stage","${stage.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}"`,
+          `"Generated On","${new Date().toISOString()}"`,
+          `"Status","${results.status || 'Completed'}"`,
+          '',  // Empty line separator
+          '"Structure Analysis Results"',
+          csvHeader.trim()
+        ].join('\n');
+
+        csvContent = metadata + '\n' + csvRows;
       }
-
-      // Create CSV content
-      const csvHeader = 'Property,Value\n';
-      const csvRows = Object.entries(structureData).map(([key, value]) => {
-        const propertyName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-        const propertyValue = typeof value === 'boolean' ? (value ? 'Yes' : 'No') : 
-                            (typeof value === 'number' ? value.toFixed(2) : value);
-        return `"${propertyName}","${propertyValue}"`;
-      }).join('\n');
-
-      // Add metadata header
-      const metadata = [
-        `"Workflow ID","${params.id}"`,
-        `"Analysis Stage","${stage.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}"`,
-        `"Generated On","${new Date().toISOString()}"`,
-        `"Status","${results.status || 'Completed'}"`,
-        '',  // Empty line separator
-        '"Structure Analysis Results"',
-        csvHeader.trim()
-      ].join('\n');
-
-      const csvContent = metadata + '\n' + csvRows;
       
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
@@ -386,18 +531,54 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
       );
     }
 
+
+
     return (
       <Box>
         <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
           Binding Site Analysis Results
         </Typography>
 
-        <Paper sx={{ p: 3, mb: 4, borderRadius: 2 }}>
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', color: 'primary.main' }}>
-            3D Visualization
-          </Typography>
-          <Box sx={{ height: '500px', mb: 2, border: '1px solid #eee', borderRadius: 1 }}>
-            <BindingSite3DViewer workflowId={params.id} bindingSites={bindingSites} />
+        <Paper sx={{ p: 0, mb: 4, borderRadius: 2, overflow: 'hidden' }}>
+          {/* Clean Molecular Structure Viewer - No decorative elements */}
+          <Box sx={{ 
+            height: '600px',
+            backgroundColor: '#000',
+            position: 'relative'
+          }}>
+            {/* 3Dmol.js Protein Structure Viewer - Full container */}
+            <div 
+              id={`molviewer-${params.id}`}
+              style={{
+                width: '100%',
+                height: '100%',
+                backgroundColor: '#000'
+              }}
+            />
+            
+            {/* Minimal loading indicator - hidden once structure loads */}
+            <Box 
+              data-loading-overlay
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#000',
+                zIndex: 1
+              }}>
+              <Box sx={{
+                fontSize: '3rem',
+                opacity: 0.3,
+                color: '#666'
+              }}>
+                ●
+              </Box>
+            </Box>
           </Box>
         </Paper>
 
@@ -452,11 +633,87 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
           </Accordion>
         ))}
 
-        <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
+        <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end', gap: 2 }}>
           <Button variant="contained" startIcon={<Download />} onClick={handleDownloadResults} sx={{ backgroundColor: '#1976d2', '&:hover': { backgroundColor: '#1565c0' } }}>
             Download Results
           </Button>
         </Box>
+
+        {/* Blockchain/IPFS Integration Section */}
+        <Paper sx={{ p: 3, mt: 3, borderRadius: 2, backgroundColor: 'rgba(25, 118, 210, 0.02)' }}>
+          <Typography variant="h6" gutterBottom sx={{ color: 'primary.main', fontWeight: 'bold' }}>
+            🔗 Blockchain & IPFS Integration
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 3, color: 'text.secondary' }}>
+            Commit your binding site analysis results to blockchain for permanent provenance and integrity verification.
+          </Typography>
+          
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+            {!blockchainCommitted ? (
+              <Button
+                variant="contained"
+                onClick={commitToBlockchain}
+                disabled={commitLoading}
+                sx={{
+                  background: 'linear-gradient(45deg, #2E7D32 30%, #388E3C 90%)',
+                  color: 'white',
+                  '&:hover': {
+                    background: 'linear-gradient(45deg, #1B5E20 30%, #2E7D32 90%)',
+                  },
+                }}
+              >
+                {commitLoading ? <CircularProgress size={24} /> : 'Commit to Blockchain'}
+              </Button>
+            ) : (
+              <Button
+                variant="contained"
+                color="info"
+                onClick={verifyResults}
+                disabled={verifyLoading}
+                sx={{
+                  background: 'linear-gradient(45deg, #00BCD4 30%, #009688 90%)',
+                  color: 'white',
+                  '&:hover': {
+                    background: 'linear-gradient(45deg, #0097A7 30%, #00796B 90%)',
+                  },
+                }}
+              >
+                {verifyLoading ? <CircularProgress size={24} /> : 'Verify'}
+              </Button>
+            )}
+          </Box>
+
+          {blockchainCommitted && ipfsHash && blockchainTxHash && (
+            <Paper sx={{ p: 2, mt: 2, backgroundColor: 'rgba(46, 125, 50, 0.05)', border: '1px solid rgba(46, 125, 50, 0.2)' }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: 'primary.main', mb: 1 }}>
+                Blockchain & IPFS Records
+              </Typography>
+              <Box sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
+                <Typography variant="body2"><strong>IPFS Hash:</strong> {ipfsHash}</Typography>
+                <Typography variant="body2"><strong>Blockchain Tx:</strong> {blockchainTxHash}</Typography>
+              </Box>
+            </Paper>
+          )}
+
+          {verificationResult && (
+            <Box sx={{ mt: 2, p: 2, backgroundColor: verificationResult.verified ? 'rgba(46, 125, 50, 0.1)' : 'rgba(255, 167, 38, 0.1)', borderRadius: 1 }}>
+              <Typography variant="body2" sx={{ fontWeight: 'bold', color: verificationResult.verified ? 'success.main' : 'warning.main' }}>
+                {verificationResult.verified ? '✅ Verification Successful' : '⚠️ Verification Failed'}
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 1 }}>{verificationResult.message}</Typography>
+              {verificationResult.blockchainData && (
+                <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+                  <Typography variant="caption" display="block">
+                    Block: {verificationResult.blockchainData.blockNumber}
+                  </Typography>
+                  <Typography variant="caption" display="block">
+                    Timestamp: {new Date(verificationResult.blockchainData.timestamp * 1000).toLocaleString()}
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+          )}
+        </Paper>
       </Box>
     );
   };
@@ -635,39 +892,34 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
     }
   };
 
-  return (
-    <Box sx={{ width: '100%' }}>
-      <Paper sx={{ width: '100%', mb: 2 }}>
-        <Tabs value={currentTab} onChange={(e, val) => setCurrentTab(val)} variant="fullWidth">
-          <Tab label="Results" />
-          <Tab label="Visualization" />
-          <Tab label="Analysis" />
-        </Tabs>
-        <TabPanel value={currentTab} index={0}>
-          {renderStageResults()}
-        </TabPanel>
-        <TabPanel value={currentTab} index={1}>
-          <Box sx={{ height: 400 }}>
-            {stage === 'structure_preparation' && results?.STRUCTURE_PREPARATION ? (
-              <PDBViewer workflowId={params.id} style={{ width: '100%', height: '100%' }} />
-            ) : stage === 'binding_site_analysis' && (results?.binding_site_analysis || results?.binding_sites) ? (
-              <BindingSite3DViewer workflowId={params.id} bindingSites={results.binding_site_analysis?.binding_sites || results.binding_sites} />
-            ) : (
-              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-                <Typography variant="body1">Visualization will appear here once results are generated.</Typography>
-              </Box>
-            )}
-          </Box>
-        </TabPanel>
-        <TabPanel value={currentTab} index={2}>
-          {stage === 'structure_preparation' && results?.STRUCTURE_PREPARATION?.descriptors ? (
-            <p>Structure Analysis / Drug-likeness content goes here.</p>
-          ) : (
-            <Typography>No analysis data available for this stage.</Typography>
-          )}
-        </TabPanel>
+  // Main component render logic
+  if (!results) {
+    return (
+      <Paper sx={{ p: 4, textAlign: 'center', mt: 4 }}>
+        <HourglassEmpty sx={{ fontSize: 40, color: 'text.secondary', mb: 2 }} />
+        <Typography>Waiting for workflow to complete...</Typography>
       </Paper>
-    </Box>
-  );
+    );
+  }
+
+  switch (stage) {
+    case 'structure_preparation':
+      return renderStructurePreparation(results);
+    case 'binding_site_analysis':
+    case 'completed':
+      return renderBindingSites(results);
+    default:
+      return (
+        <Paper sx={{ p: 4, textAlign: 'center', mt: 4 }}>
+          <ErrorOutline sx={{ fontSize: 40, color: 'error.main', mb: 2 }} />
+          <Typography color="error">Unknown or invalid workflow stage: '{stage}'</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            Please check the workflow status and try again.
+          </Typography>
+        </Paper>
+      );
+  }
 }
+
+export default WorkflowResults;
 

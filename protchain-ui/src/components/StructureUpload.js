@@ -94,14 +94,16 @@ export default function StructureUpload({ onUploadComplete, workflowId }) {
         throw new Error('Failed to fetch protein data. Please check the PDB ID and try again.');
       }
 
-      const pdbBlob = new Blob([response.file], { type: 'chemical/x-pdb' });
-      const formData = new FormData();
-      formData.append('file', pdbBlob, `${pdbId}.pdb`);
-
-      // Upload to workflow
+      // Send PDB ID directly to backend (no file upload needed)
+      // Backend will fetch the real PDB file from RCSB database
       const uploadResponse = await fetch(`/api/workflow/${workflowId}/structure`, {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          pdbId: pdbId.trim().toUpperCase()
+        }),
       });
 
       if (!uploadResponse.ok) {

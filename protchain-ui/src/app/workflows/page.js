@@ -184,6 +184,142 @@ export default function WorkflowsPage() {
     }
   };
 
+  const extractProteinName = (workflowName) => {
+    if (workflowName?.toLowerCase().includes('amyloid')) return 'Amyloid Beta';
+    if (workflowName?.toLowerCase().includes('insulin')) return 'Insulin';
+    if (workflowName?.toLowerCase().includes('hemoglobin')) return 'Hemoglobin';
+    if (workflowName?.toLowerCase().includes('lysozyme')) return 'Lysozyme';
+    if (workflowName?.toLowerCase().includes('1abc')) return 'Lysozyme';
+    if (workflowName?.toLowerCase().includes('1ins')) return 'Insulin';
+    return 'Unknown Protein';
+  };
+
+  const extractPDBId = (workflowName) => {
+    const pdbMatch = workflowName?.match(/[0-9][A-Za-z0-9]{3}/);
+    return pdbMatch ? pdbMatch[0].toUpperCase() : null;
+  };
+
+  const getProteinDescription = (proteinName) => {
+    const descriptions = {
+      'Amyloid Beta': 'Alzheimer\'s disease research',
+      'Insulin': 'Diabetes treatment research',
+      'Hemoglobin': 'Blood disorder research',
+      'Lysozyme': 'Antimicrobial research',
+      'Unknown Protein': 'Drug discovery analysis'
+    };
+    return descriptions[proteinName] || 'Protein analysis';
+  };
+
+  const getWorkflowTitle = (workflow) => {
+    // Use the actual workflow name instead of extracting protein names
+    return `${workflow.name} - Drug Discovery`;
+  };
+
+  const getStageProgress = (workflow) => {
+    // Mock progress based on workflow age or name patterns
+    const created = new Date(workflow.created_at);
+    const now = new Date();
+    const ageHours = (now - created) / (1000 * 60 * 60);
+    
+    if (ageHours > 24) return { stage: 'Binding Site Analysis', progress: 40, color: 'success' };
+    if (ageHours > 12) return { stage: 'Structure Analysis', progress: 20, color: 'success' };
+    return { stage: 'Initializing', progress: 0, color: 'default' };
+  };
+
+  const renderWorkflowCard = (workflow) => {
+    const proteinName = extractProteinName(workflow.name);
+    const description = getProteinDescription(proteinName);
+    const title = getWorkflowTitle(workflow);
+    const progress = getStageProgress(workflow);
+    
+    return (
+      <Grid item xs={12} sm={6} md={4} key={workflow.id}>
+        <Card sx={{ 
+          height: '100%', 
+          display: 'flex', 
+          flexDirection: 'column',
+          '&:hover': { boxShadow: 4 },
+          transition: 'box-shadow 0.2s'
+        }}>
+          <CardContent sx={{ flexGrow: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+              <Box sx={{ 
+                p: 1, 
+                borderRadius: '50%', 
+                bgcolor: '#4CAF50', 
+                color: 'white',
+                mr: 2 
+              }}>
+                <ScienceIcon />
+              </Box>
+              <Box sx={{ flexGrow: 1 }}>
+                <Typography variant="h6" component="h2" sx={{ fontWeight: 600 }}>
+                  {title}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {description}
+                </Typography>
+              </Box>
+            </Box>
+            
+            <Box sx={{ mb: 2 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Current Stage: {progress.stage}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {progress.progress}%
+                </Typography>
+              </Box>
+              <Box sx={{ 
+                width: '100%', 
+                height: 6, 
+                bgcolor: 'grey.200', 
+                borderRadius: 3,
+                overflow: 'hidden'
+              }}>
+                <Box sx={{ 
+                  width: `${progress.progress}%`, 
+                  height: '100%', 
+                  bgcolor: progress.color === 'success' ? '#4CAF50' : 'grey.400',
+                  transition: 'width 0.3s ease'
+                }} />
+              </Box>
+            </Box>
+            
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Created: {new Date(workflow.created_at).toLocaleDateString()}
+            </Typography>
+            {workflow.updated_at && (
+              <Typography variant="body2" color="text.secondary">
+                Last updated: {new Date(workflow.updated_at).toLocaleDateString()}
+              </Typography>
+            )}
+          </CardContent>
+          <CardActions sx={{ p: 2, pt: 0 }}>
+            <Button 
+              component={Link} 
+              href={`/workflows/${workflow.id}`} 
+              size="small" 
+              variant="contained"
+              fullWidth
+              sx={{ mr: 1 }}
+            >
+              Open Analysis
+            </Button>
+            <IconButton
+              onClick={() => openDeleteDialog(workflow)}
+              color="error"
+              size="small"
+            >
+              <DeleteIcon />
+            </IconButton>
+          </CardActions>
+        </Card>
+      </Grid>
+    );
+  };
+
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       {error && (
@@ -218,26 +354,7 @@ export default function WorkflowsPage() {
 
       <Grid container spacing={3}>
         {workflows.length > 0 ? (
-          workflows.map((workflow) => (
-            <Grid item xs={12} md={6} lg={4} key={workflow.id}>
-              <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                <CardContent sx={{ flexGrow: 1 }}>
-                  <Typography variant="h6">{workflow.name}</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    Created: {new Date(workflow.created_at).toLocaleString()}
-                  </Typography>
-                </CardContent>
-                <CardActions sx={{ justifyContent: 'space-between' }}>
-                  <Button component={Link} href={`/workflows/${workflow.id}`} size="small">
-                    Open
-                  </Button>
-                  <IconButton onClick={() => openDeleteDialog(workflow)} size="small" aria-label="delete">
-                    <DeleteIcon />
-                  </IconButton>
-                </CardActions>
-              </Card>
-            </Grid>
-          ))
+          workflows.map(renderWorkflowCard)
         ) : (
           <Typography sx={{ ml: 2, mt: 2 }}>No workflows found. Create one to get started.</Typography>
         )}

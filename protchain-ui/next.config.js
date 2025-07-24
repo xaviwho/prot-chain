@@ -49,9 +49,10 @@ const nextConfig = {
     }
     
     // Ignore specific modules that cause issues
+    const webpack = require('webpack');
     config.plugins = config.plugins || [];
     config.plugins.push(
-      new config.webpack.IgnorePlugin({
+      new webpack.IgnorePlugin({
         resourceRegExp: /^electron$/,
       })
     );
