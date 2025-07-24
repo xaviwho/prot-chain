@@ -29,25 +29,32 @@ services:
     build:
       context: ./bioapi
       dockerfile: Dockerfile
-    container_name: bio-api
     ports:
       - "8000:8000"
     volumes:
-      - ./uploads:/uploads
-    restart: unless-stopped
+      - ./uploads:/app/uploads
+    environment:
+      - PYTHONUNBUFFERED=1
+      - UPLOAD_DIR=/app/uploads
     depends_on:
+      - db
       - ipfs
 
   ipfs:
     image: ipfs/kubo:latest
     container_name: ipfs
     ports:
-      - "5001:5001"
-      - "8080:8080"
+      - "4001:4001"  # P2P port
+      - "5001:5001"  # API port
+      - "8080:8080"  # Gateway port
     volumes:
       - ipfs_data:/data/ipfs
+      - ipfs_staging:/export
+    environment:
+      - IPFS_PROFILE=server
     restart: unless-stopped
 
 volumes:
   postgres_data:
   ipfs_data:
+  ipfs_staging:

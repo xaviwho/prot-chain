@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import {
   Box,
@@ -19,6 +19,7 @@ import {
   AccordionDetails,
   LinearProgress,
   Button,
+  CircularProgress,
 } from '@mui/material';
 import { ExpandMore, Download } from '@mui/icons-material';
 import dynamic from 'next/dynamic';
@@ -36,18 +37,114 @@ function TabPanel({ children, value, index }) {
 }
 
 export default function WorkflowResults({ results, stage, activeTab = 0 }) {
-  const [loading, setLoading] = useState(false);
-  const [localResults, setLocalResults] = useState(null);
+  const [blockchainCommitted, setBlockchainCommitted] = useState(false);
+  const [ipfsHash, setIpfsHash] = useState(null);
+  const [blockchainTxHash, setBlockchainTxHash] = useState(null);
+  const [commitLoading, setCommitLoading] = useState(false);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verificationResult, setVerificationResult] = useState(null);
+  const [currentTab, setCurrentTab] = useState(activeTab);
   const params = useParams();
-  
-  // Initialize local results from props
-  useEffect(() => {
-    if (results) {
-      setLocalResults(results);
-    }
-  }, [results]);
 
-  // Download functionality
+  console.log('🔍 WorkflowResults component received:');
+  console.log('  - results:', JSON.stringify(results, null, 2));
+  console.log('  - stage:', stage);
+  console.log('  - activeTab:', activeTab);
+  console.log('  - results type:', typeof results);
+  console.log('  - results is null?', results === null);
+  console.log('  - results is undefined?', results === undefined);
+
+  const commitToBlockchain = async () => {
+    if (!results || !params.id) return;
+
+    setCommitLoading(true);
+    try {
+      const ipfsResponse = await fetch('/api/ipfs/upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify({
+          workflowId: params.id,
+          results: results,
+          timestamp: new Date().toISOString(),
+          stage: stage,
+        }),
+      });
+
+      if (!ipfsResponse.ok) {
+        throw new Error('Failed to upload to IPFS');
+      }
+
+      const ipfsData = await ipfsResponse.json();
+      setIpfsHash(ipfsData.hash);
+
+      const blockchainResponse = await fetch('/api/blockchain/commit-results', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify({
+          workflowId: params.id,
+          ipfsHash: ipfsData.hash,
+          resultsHash: generateResultsHash(results),
+          stage: stage,
+        }),
+      });
+
+      if (!blockchainResponse.ok) {
+        throw new Error('Failed to commit to blockchain');
+      }
+
+      const blockchainData = await blockchainResponse.json();
+      setBlockchainTxHash(blockchainData.transactionHash);
+      setBlockchainCommitted(true);
+    } catch (error) {
+      console.error('Error committing to blockchain:', error);
+      alert('Failed to commit results to blockchain: ' + error.message);
+    } finally {
+      setCommitLoading(false);
+    }
+  };
+
+  const verifyResults = async () => {
+    if (!blockchainTxHash || !ipfsHash) return;
+
+    setVerifyLoading(true);
+    try {
+      const verifyResponse = await fetch('/api/blockchain/verify-results', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify({
+          transactionHash: blockchainTxHash,
+          ipfsHash: ipfsHash,
+          workflowId: params.id,
+        }),
+      });
+
+      if (!verifyResponse.ok) {
+        throw new Error('Failed to verify results');
+      }
+
+      const verifyData = await verifyResponse.json();
+      setVerificationResult(verifyData);
+    } catch (error) {
+      console.error('Error verifying results:', error);
+      alert('Failed to verify results: ' + error.message);
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const generateResultsHash = (results) => {
+    return btoa(JSON.stringify(results)).slice(0, 32);
+  };
+
   const handleDownloadResults = () => {
     if (!results) {
       console.log('No results available for download');
@@ -55,102 +152,97 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
     }
 
     try {
-      // Create a comprehensive results object
-      const downloadData = {
-        workflow_id: params.id,
-        stage: stage,
-        timestamp: new Date().toISOString(),
-        results: results
-      };
+      // Extract structure data based on stage
+      let structureData = {};
+      if (stage === 'structure_preparation' && results.details?.descriptors) {
+        structureData = results.details.descriptors;
+      } else if (results.STRUCTURE_PREPARATION?.descriptors) {
+        structureData = results.STRUCTURE_PREPARATION.descriptors;
+      } else if (results.structure_preparation?.descriptors) {
+        structureData = results.structure_preparation.descriptors;
+      }
 
-      // Convert to JSON string with proper formatting
-      const jsonString = JSON.stringify(downloadData, null, 2);
+      // Create CSV content
+      const csvHeader = 'Property,Value\n';
+      const csvRows = Object.entries(structureData).map(([key, value]) => {
+        const propertyName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        const propertyValue = typeof value === 'boolean' ? (value ? 'Yes' : 'No') : 
+                            (typeof value === 'number' ? value.toFixed(2) : value);
+        return `"${propertyName}","${propertyValue}"`;
+      }).join('\n');
+
+      // Add metadata header
+      const metadata = [
+        `"Workflow ID","${params.id}"`,
+        `"Analysis Stage","${stage.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}"`,
+        `"Generated On","${new Date().toISOString()}"`,
+        `"Status","${results.status || 'Completed'}"`,
+        '',  // Empty line separator
+        '"Structure Analysis Results"',
+        csvHeader.trim()
+      ].join('\n');
+
+      const csvContent = metadata + '\n' + csvRows;
       
-      // Create blob and download link
-      const blob = new Blob([jsonString], { type: 'application/json' });
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
-      
-      // Create temporary download link
       const link = document.createElement('a');
       link.href = url;
-      link.download = `workflow-${params.id}-${stage}-results-${new Date().toISOString().split('T')[0]}.json`;
-      
-      // Trigger download
+      link.download = `workflow-${params.id}-${stage}-results-${new Date().toISOString().split('T')[0]}.csv`;
       document.body.appendChild(link);
       link.click();
-      
-      // Cleanup
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      
-      console.log('Results downloaded successfully');
+      console.log('CSV results downloaded successfully');
     } catch (error) {
-      console.error('Error downloading results:', error);
+      console.error('Error downloading CSV results:', error);
     }
   };
 
   const renderStructurePreparation = (data) => {
     console.log('Structure preparation data:', data);
-    
-    // Extract structure data from various possible formats
     let structureData = {};
-    
-    // Option 1: Direct STRUCTURE_PREPARATION key
-    if (data?.STRUCTURE_PREPARATION?.descriptors) {
-      structureData = data.STRUCTURE_PREPARATION.descriptors;
-    }
-    // Option 2: Check for atom_count and other properties directly in data
-    else if (data && (data.atom_count || data.residue_count || data.chain_count)) {
-      structureData = {
-        num_atoms: data.atom_count,
-        num_residues: data.residue_count,
-        num_chains: data.chain_count,
-        hetatm_count: data.hetatm_count,
-        has_hydrogens: data.has_hydrogens,
-        has_ligands: data.has_ligands
-      };
-    }
-    // Option 3: Look for structure data in a nested structure
-    else if (data?.structure_preparation) {
-      if (data.structure_preparation.atom_count) {
+
+    if (typeof data === 'object' && data !== null) {
+      if (data.details && data.details.descriptors) {
+        console.log('Found bioapi format with details.descriptors');
+        structureData = data.details.descriptors;
+      } else if (data.STRUCTURE_PREPARATION && data.STRUCTURE_PREPARATION.descriptors) {
+        console.log('Found STRUCTURE_PREPARATION.descriptors format');
+        structureData = data.STRUCTURE_PREPARATION.descriptors;
+      } else if (data.atom_count || data.residue_count || data.chain_count) {
+        console.log('Found direct properties format');
         structureData = {
-          num_atoms: data.structure_preparation.atom_count,
-          num_residues: data.structure_preparation.residue_count,
-          num_chains: data.structure_preparation.chain_count,
-          hetatm_count: data.structure_preparation.hetatm_count,
-          has_hydrogens: data.structure_preparation.has_hydrogens,
-          has_ligands: data.structure_preparation.has_ligands
+          num_atoms: data.atom_count,
+          num_residues: data.residue_count,
+          num_chains: data.chain_count,
+          hetatm_count: data.hetatm_count,
+          has_hydrogens: data.has_hydrogens,
+          has_ligands: data.has_ligands,
         };
-      } else {
-        structureData = data.structure_preparation;
+      } else if (data.structure_preparation && data.structure_preparation.descriptors) {
+        console.log('Found structure_preparation.descriptors format');
+        structureData = data.structure_preparation.descriptors;
       }
     }
-    
-    // If we still don't have structure data, show an error
+
+    console.log('Extracted structure data:', structureData);
+
     if (Object.keys(structureData).length === 0) {
       return (
         <Box>
           <Typography variant="h6" gutterBottom>
-            Structure Analysis
+            Structure Preparation Results
           </Typography>
-          <Paper sx={{ p: 3 }}>
-            <Typography variant="body1" color="error" gutterBottom>
-              No structure analysis data available
+          <Paper sx={{ p: 4, textAlign: 'center' }}>
+            <Typography color="text.secondary">
+              No structure analysis results available
             </Typography>
-            <Button 
-              variant="contained" 
-              color="primary"
-              sx={{ mt: 2 }}
-              onClick={() => window.location.reload()}
-            >
-              Refresh Page
-            </Button>
           </Paper>
         </Box>
       );
     }
-    
-    // Create a more visually appealing display for structure data
+
     return (
       <Box>
         <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
@@ -166,85 +258,98 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {structureData.num_chains !== undefined && (
-                  <TableRow>
-                    <TableCell>Chains</TableCell>
-                    <TableCell>{structureData.num_chains}</TableCell>
+                {Object.entries(structureData).map(([key, value]) => (
+                  <TableRow key={key}>
+                    <TableCell>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</TableCell>
+                    <TableCell>{typeof value === 'boolean' ? (value ? 'Yes' : 'No') : (typeof value === 'number' ? value.toFixed(2) : value)}</TableCell>
                   </TableRow>
-                )}
-                {structureData.num_residues !== undefined && (
-                  <TableRow>
-                    <TableCell>Residues</TableCell>
-                    <TableCell>{structureData.num_residues}</TableCell>
-                  </TableRow>
-                )}
-                {structureData.num_atoms !== undefined && (
-                  <TableRow>
-                    <TableCell>Atoms</TableCell>
-                    <TableCell>{structureData.num_atoms}</TableCell>
-                  </TableRow>
-                )}
-                {structureData.hetatm_count !== undefined && (
-                  <TableRow>
-                    <TableCell>HETATM Count</TableCell>
-                    <TableCell>{structureData.hetatm_count}</TableCell>
-                  </TableRow>
-                )}
-                {structureData.molecular_weight !== undefined && (
-                  <TableRow>
-                    <TableCell>Molecular Weight</TableCell>
-                    <TableCell>{typeof structureData.molecular_weight === 'number' ? structureData.molecular_weight.toFixed(2) : structureData.molecular_weight}</TableCell>
-                  </TableRow>
-                )}
-                {structureData.num_bonds !== undefined && (
-                  <TableRow>
-                    <TableCell>Bonds</TableCell>
-                    <TableCell>{structureData.num_bonds}</TableCell>
-                  </TableRow>
-                )}
-                {structureData.num_rings !== undefined && (
-                  <TableRow>
-                    <TableCell>Rings</TableCell>
-                    <TableCell>{structureData.num_rings}</TableCell>
-                  </TableRow>
-                )}
-                {structureData.num_rotatable_bonds !== undefined && (
-                  <TableRow>
-                    <TableCell>Rotatable Bonds</TableCell>
-                    <TableCell>{structureData.num_rotatable_bonds}</TableCell>
-                  </TableRow>
-                )}
-                {structureData.has_hydrogens !== undefined && (
-                  <TableRow>
-                    <TableCell>Has Hydrogens</TableCell>
-                    <TableCell>{structureData.has_hydrogens ? 'Yes' : 'No'}</TableCell>
-                  </TableRow>
-                )}
-                {structureData.has_ligands !== undefined && (
-                  <TableRow>
-                    <TableCell>Has Ligands</TableCell>
-                    <TableCell>{structureData.has_ligands ? 'Yes' : 'No'}</TableCell>
-                  </TableRow>
-                )}
+                ))}
               </TableBody>
             </Table>
           </TableContainer>
-          
-          {/* Download Results Button */}
-          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
-            <Button
-              variant="contained"
-              startIcon={<Download />}
-              onClick={handleDownloadResults}
-              sx={{
-                backgroundColor: '#1976d2',
-                '&:hover': {
-                  backgroundColor: '#1565c0'
-                }
-              }}
-            >
-              Download Results
-            </Button>
+
+          <Box sx={{ mt: 3 }}>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 3 }}>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleDownloadResults}
+                sx={{
+                  background: 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
+                  color: 'white',
+                  '&:hover': {
+                    background: 'linear-gradient(45deg, #1976D2 30%, #0288D1 90%)',
+                  },
+                }}
+              >
+                Download Results
+              </Button>
+
+              {!blockchainCommitted ? (
+                <Button
+                  variant="contained"
+                  color="success"
+                  onClick={commitToBlockchain}
+                  disabled={commitLoading}
+                  sx={{
+                    background: 'linear-gradient(45deg, #4CAF50 30%, #8BC34A 90%)',
+                    color: 'white',
+                    '&:hover': {
+                      background: 'linear-gradient(45deg, #388E3C 30%, #689F38 90%)',
+                    },
+                  }}
+                >
+                  {commitLoading ? <CircularProgress size={24} /> : 'Commit to Blockchain'}
+                </Button>
+              ) : (
+                <Button
+                  variant="contained"
+                  color="info"
+                  onClick={verifyResults}
+                  disabled={verifyLoading}
+                  sx={{
+                    background: 'linear-gradient(45deg, #00BCD4 30%, #009688 90%)',
+                    color: 'white',
+                    '&:hover': {
+                      background: 'linear-gradient(45deg, #0097A7 30%, #00796B 90%)',
+                    },
+                  }}
+                >
+                  {verifyLoading ? <CircularProgress size={24} /> : 'Verify'}
+                </Button>
+              )}
+            </Box>
+
+            {blockchainCommitted && ipfsHash && blockchainTxHash && (
+              <Paper sx={{ p: 2, mt: 2, backgroundColor: 'rgba(46, 125, 50, 0.05)', border: '1px solid rgba(46, 125, 50, 0.2)' }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: 'primary.main', mb: 1 }}>
+                  Blockchain & IPFS Records
+                </Typography>
+                <Box sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
+                  <Typography variant="body2"><strong>IPFS Hash:</strong> {ipfsHash}</Typography>
+                  <Typography variant="body2"><strong>Blockchain Tx:</strong> {blockchainTxHash}</Typography>
+                </Box>
+              </Paper>
+            )}
+
+            {verificationResult && (
+              <Box sx={{ mt: 2, p: 2, backgroundColor: verificationResult.verified ? 'rgba(46, 125, 50, 0.1)' : 'rgba(255, 167, 38, 0.1)', borderRadius: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: 'bold', color: verificationResult.verified ? 'success.main' : 'warning.main' }}>
+                  {verificationResult.verified ? '✅ Verification Successful' : '⚠️ Verification Failed'}
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 1 }}>{verificationResult.message}</Typography>
+                {verificationResult.blockchainData && (
+                  <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+                    <Typography variant="caption" display="block">
+                      Block: {verificationResult.blockchainData.blockNumber}
+                    </Typography>
+                    <Typography variant="caption" display="block">
+                      Timestamp: {new Date(verificationResult.blockchainData.timestamp * 1000).toLocaleString()}
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
+            )}
           </Box>
         </Paper>
       </Box>
@@ -253,24 +358,16 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
 
   const renderBindingSites = (data) => {
     console.log('Rendering binding sites with data:', data);
-    
-    // Check all possible locations for binding site data
     let bindingSites = [];
-    
-    // Option 1: Direct binding_sites array
+
     if (data?.binding_sites && Array.isArray(data.binding_sites) && data.binding_sites.length > 0) {
       console.log('Found binding sites in data.binding_sites');
       bindingSites = data.binding_sites;
-    }
-    // Option 2: Inside binding_site_analysis object
-    else if (data?.binding_site_analysis?.binding_sites && 
-             Array.isArray(data.binding_site_analysis.binding_sites) && 
-             data.binding_site_analysis.binding_sites.length > 0) {
+    } else if (data?.binding_site_analysis?.binding_sites && Array.isArray(data.binding_site_analysis.binding_sites) && data.binding_site_analysis.binding_sites.length > 0) {
       console.log('Found binding sites in data.binding_site_analysis.binding_sites');
       bindingSites = data.binding_site_analysis.binding_sites;
     }
-    
-    // If no binding sites found, show message
+
     if (bindingSites.length === 0) {
       return (
         <Box>
@@ -281,11 +378,7 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
             <Typography color="text.secondary" sx={{ mb: 2 }}>
               No binding sites found. Please run binding site analysis.
             </Typography>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={() => window.location.reload()}
-            >
+            <Button variant="contained" color="primary" onClick={() => window.location.reload()}>
               Refresh Page
             </Button>
           </Paper>
@@ -293,43 +386,27 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
       );
     }
 
-    // Render binding sites with 3D visualization
     return (
       <Box>
         <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
           Binding Site Analysis Results
         </Typography>
-        
-        {/* 3D Visualization of binding sites */}
+
         <Paper sx={{ p: 3, mb: 4, borderRadius: 2 }}>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', color: 'primary.main' }}>
             3D Visualization
           </Typography>
           <Box sx={{ height: '500px', mb: 2, border: '1px solid #eee', borderRadius: 1 }}>
-            <BindingSite3DViewer 
-              workflowId={params.id} 
-              bindingSites={bindingSites} 
-            />
+            <BindingSite3DViewer workflowId={params.id} bindingSites={bindingSites} />
           </Box>
         </Paper>
-        
-        {/* Detailed binding site information */}
+
         <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', mb: 2 }}>
           Binding Site Details
         </Typography>
         {bindingSites.map((site, index) => (
-          <Accordion 
-            key={index} 
-            sx={{ 
-              mb: 2, 
-              '&:before': { display: 'none' },
-              boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
-            }}
-          >
-            <AccordionSummary 
-              expandIcon={<ExpandMore />}
-              sx={{ backgroundColor: '#f8f9fa' }}
-            >
+          <Accordion key={index} sx={{ mb: 2, '&:before': { display: 'none' }, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+            <AccordionSummary expandIcon={<ExpandMore />} sx={{ backgroundColor: '#f8f9fa' }}>
               <Typography sx={{ fontWeight: 'medium' }}>
                 Binding Site {index + 1} (Score: {site.score?.toFixed(2) || 'N/A'})
               </Typography>
@@ -356,9 +433,7 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
                     )}
                     <TableRow>
                       <TableCell>Center</TableCell>
-                      <TableCell>
-                        ({site.center.x.toFixed(2)}, {site.center.y.toFixed(2)}, {site.center.z.toFixed(2)})
-                      </TableCell>
+                      <TableCell>({site.center.x.toFixed(2)}, {site.center.y.toFixed(2)}, {site.center.z.toFixed(2)})</TableCell>
                     </TableRow>
                     <TableRow>
                       <TableCell>Residues</TableCell>
@@ -376,58 +451,15 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
             </AccordionDetails>
           </Accordion>
         ))}
-        
-        {/* Download Results Button */}
+
         <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
-          <Button
-            variant="contained"
-            startIcon={<Download />}
-            onClick={handleDownloadResults}
-            sx={{
-              backgroundColor: '#1976d2',
-              '&:hover': {
-                backgroundColor: '#1565c0'
-              }
-            }}
-          >
+          <Button variant="contained" startIcon={<Download />} onClick={handleDownloadResults} sx={{ backgroundColor: '#1976d2', '&:hover': { backgroundColor: '#1565c0' } }}>
             Download Results
           </Button>
         </Box>
       </Box>
     );
   };
-
-  const renderScreeningResults = (data) => (
-    <Box>
-      <Typography variant="h6" gutterBottom>
-        Virtual Screening Results
-      </Typography>
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Compound</TableCell>
-              <TableCell>Score</TableCell>
-              <TableCell>Binding Energy</TableCell>
-              <TableCell>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {data.compounds.map((compound, index) => (
-              <TableRow key={index}>
-                <TableCell>{compound.name}</TableCell>
-                <TableCell>{compound.score.toFixed(2)}</TableCell>
-                <TableCell>{compound.binding_energy.toFixed(2)} kcal/mol</TableCell>
-                <TableCell>
-                  <Button size="small" variant="outlined">View</Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </Box>
-  );
 
   const renderMDResults = (data) => (
     <Box>
@@ -455,7 +487,7 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
           </TableBody>
         </Table>
       </TableContainer>
-      
+
       {data.trajectories.map((traj, index) => (
         <Accordion key={index}>
           <AccordionSummary expandIcon={<ExpandMore />}>
@@ -513,7 +545,7 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
   );
 
   const renderVirtualScreeningResults = (data) => {
-    console.log("Rendering Virtual Screening Results with data:", data);
+    console.log('Rendering Virtual Screening Results with data:', data);
 
     if (!data || data.status !== 'completed') {
       return (
@@ -523,36 +555,11 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
           </Typography>
           <Paper sx={{ p: 4, textAlign: 'center', borderRadius: 2 }}>
             <Typography color="text.secondary" sx={{ mb: 2 }}>
-              {data?.status === 'running' ? 'Virtual screening is in progress...' : 'Virtual screening not yet completed or results unavailable.'}
+              {data ? `Status: ${data.status}` : 'No data available.'}
             </Typography>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={() => window.location.reload()}
-            >
-              Refresh Page
-            </Button>
-          </Paper>
-        </Box>
-      );
-    }
-
-    if (!data.top_compounds || data.top_compounds.length === 0) {
-      return (
-        <Box>
-          <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
-            Virtual Screening Analysis
-          </Typography>
-          <Paper sx={{ p: 4, textAlign: 'center', borderRadius: 2 }}>
-            <Typography color="text.secondary" sx={{ mb: 2 }}>
-              Screening completed, but no top compounds found.
-            </Typography>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={() => window.location.reload()}
-            >
-              Refresh Page
+            {data && data.status === 'running' && <LinearProgress sx={{ mb: 2 }} />}
+            <Button variant="contained" color="primary" onClick={() => window.location.reload()}>
+              Check Status
             </Button>
           </Paper>
         </Box>
@@ -562,61 +569,36 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
     return (
       <Box>
         <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
-          Virtual Screening Results
+          Virtual Screening Top Compounds
         </Typography>
-        
-        <Paper sx={{ p: 3, mb: 4, borderRadius: 2 }}>
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', color: 'primary.main', mb: 2 }}>
-            Top Compounds
-          </Typography>
-          <TableContainer sx={{ maxHeight: 440, border: '1px solid #eee', borderRadius: 1 }}>
-            <Table stickyHeader aria-label="virtual screening results table">
-              <TableHead sx={{ backgroundColor: '#f5f5f5' }}>
+        <Paper sx={{ p: 3, borderRadius: 2 }}>
+          <TableContainer>
+            <Table>
+              <TableHead>
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 'bold' }}>Compound ID</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 'bold' }}>Score</TableCell>
-                  <TableCell sx={{ fontWeight: 'bold' }}>SMILES</TableCell>
+                  <TableCell>Compound ID</TableCell>
+                  <TableCell>Docking Score</TableCell>
+                  <TableCell>SMILES</TableCell>
+                  <TableCell>Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {data.top_compounds.map((compound) => (
-                  <TableRow
-                    key={compound.id}
-                    sx={{ 
-                      '&:last-child td, &:last-child th': { border: 0 },
-                      '&:hover': { backgroundColor: '#f8f9fa' }
-                    }}
-                  >
-                    <TableCell component="th" scope="row">
-                      {compound.id}
+                  <TableRow key={compound.id}>
+                    <TableCell>{compound.id}</TableCell>
+                    <TableCell>{compound.score.toFixed(3)}</TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>{compound.smiles}</TableCell>
+                    <TableCell>
+                      <Button size="small" variant="outlined">View 3D</Button>
                     </TableCell>
-                    <TableCell align="right">{compound.score}</TableCell>
-                    <TableCell sx={{ wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.85rem' }}>
-                      {compound.smiles}
-                    </TableCell> 
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </TableContainer>
-          
-          <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-              Timestamp: {new Date(data.timestamp).toLocaleString()}
-            </Typography>
-            <Button 
-              variant="contained"
-              size="small"
-              startIcon={<Download />}
-              onClick={handleDownloadResults}
-              sx={{
-                backgroundColor: '#1976d2',
-                '&:hover': {
-                  backgroundColor: '#1565c0'
-                }
-              }}
-            >
-              Download Results
+          <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
+            <Button variant="contained" startIcon={<Download />} onClick={handleDownloadResults} sx={{ backgroundColor: '#1976d2', '&:hover': { backgroundColor: '#1565c0' } }}>
+              Download Report
             </Button>
           </Box>
         </Paper>
@@ -625,414 +607,67 @@ export default function WorkflowResults({ results, stage, activeTab = 0 }) {
   };
 
   const renderStageResults = () => {
-    console.log('Rendering stage results for stage:', stage, 'with activeTab:', activeTab);
-    console.log('Results:', results);
-    
+    console.log('Rendering results for stage:', stage, 'with data:', results);
+
     if (!results) {
-      return <Typography>No results available</Typography>;
+      return <Typography>No results available for this workflow.</Typography>;
     }
-    
-    // Structure Preparation Stage
-    if (stage === 'structure_preparation') {
-      // Tab 0: Results
-      if (activeTab === 0) {
-        return results?.STRUCTURE_PREPARATION ? 
+
+    switch (stage) {
+      case 'structure_preparation':
+        // Check for bioapi format (details.descriptors) or legacy formats
+        return (results.details?.descriptors || results.STRUCTURE_PREPARATION || results.structure_preparation) ? 
           renderStructurePreparation(results) : 
-          <Typography>No structure preparation results available</Typography>;
-      }
-      // Tab 1: Visualization
-      else if (activeTab === 1) {
-        return (
-          <Box>
-            <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
-              3D Structure Visualization
-            </Typography>
-            <Paper sx={{ p: 3, height: '500px', mb: 3 }}>
-              <PDBViewer workflowId={params.id} />
-            </Paper>
-          </Box>
-        );
-      }
-      // Tab 2: Analysis
-      else if (activeTab === 2) {
-        return (
-          <Box>
-            <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
-              Structure Analysis
-            </Typography>
-            <Paper sx={{ p: 3, mb: 3 }}>
-              <Typography variant="body1" paragraph>
-                This section provides detailed analysis of the protein structure properties.
-              </Typography>
-              {results?.STRUCTURE_PREPARATION?.descriptors ? (
-                <TableContainer>
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Property</TableCell>
-                        <TableCell>Value</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {Object.entries(results.STRUCTURE_PREPARATION.descriptors).map(([key, value]) => (
-                        <TableRow key={key}>
-                          <TableCell>{key.replace(/_/g, ' ')}</TableCell>
-                          <TableCell>{typeof value === 'number' ? value.toFixed(2) : String(value)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              ) : (
-                <Typography>No analysis data available</Typography>
-              )}
-            </Paper>
-          </Box>
-        );
-      }
-    }
-    
-    // Binding Site Analysis Stage
-    else if (stage === 'binding_site_analysis') {
-      // Tab 0: Results
-      if (activeTab === 0) {
-        return results?.binding_site_analysis || results?.binding_sites ? 
-          renderBindingSites(results) : 
-          <Typography>No binding site analysis results available</Typography>;
-      }
-      // Tab 1: Binding Sites
-      else if (activeTab === 1) {
-        let bindingSites = [];
-        if (results?.binding_sites) bindingSites = results.binding_sites;
-        else if (results?.binding_site_analysis?.binding_sites) bindingSites = results.binding_site_analysis.binding_sites;
-        
-        return (
-          <Box>
-            <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
-              Binding Sites Visualization
-            </Typography>
-            <Paper sx={{ p: 3, height: '500px', mb: 3 }}>
-              {bindingSites.length > 0 ? (
-                <BindingSite3DViewer workflowId={params.id} bindingSites={bindingSites} />
-              ) : (
-                <Typography>No binding sites available for visualization</Typography>
-              )}
-            </Paper>
-          </Box>
-        );
-      }
-    }
-    
-    // Virtual Screening Stage
-    else if (stage === 'virtual_screening') {
-      // Tab 0: Results
-      if (activeTab === 0) {
-        return results?.virtual_screening ? 
-          renderVirtualScreeningResults(results.virtual_screening) : 
-          <Typography>No virtual screening results available</Typography>;
-      }
-      // Tab 1: Compounds
-      else if (activeTab === 1) {
-        return (
-          <Box>
-            <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
-              Screened Compounds
-            </Typography>
-            <Paper sx={{ p: 3, mb: 3 }}>
-              {results?.virtual_screening?.top_compounds ? (
-                <TableContainer>
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Compound ID</TableCell>
-                        <TableCell>Score</TableCell>
-                        <TableCell>SMILES</TableCell>
-                        <TableCell>Actions</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {results.virtual_screening.top_compounds.map((compound) => (
-                        <TableRow key={compound.id}>
-                          <TableCell>{compound.id}</TableCell>
-                          <TableCell>{compound.score}</TableCell>
-                          <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>{compound.smiles}</TableCell>
-                          <TableCell>
-                            <Button size="small" variant="outlined">View 3D</Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              ) : (
-                <Typography>No compound data available</Typography>
-              )}
-            </Paper>
-          </Box>
-        );
-      }
-    }
-    
-    // Molecular Dynamics Stage
-    else if (stage === 'molecular_dynamics') {
-      return results?.molecular_dynamics ? 
-        renderMolecularDynamics(results.molecular_dynamics) : 
-        <Typography>No molecular dynamics results available</Typography>;
-    }
-    
-    // Lead Optimization Stage
-    else if (stage === 'lead_optimization') {
-      return results?.lead_optimization ? 
-        renderLeadOptimization(results.lead_optimization) : 
-        <Typography>No lead optimization results available</Typography>;
-    }
-    
-    // Default case
-    else {
-      return <Typography>Select a stage to view results</Typography>;
+          <Typography>No structure preparation results available.</Typography>;
+      case 'binding_site_analysis':
+        return (results.binding_site_analysis || results.binding_sites) ? renderBindingSites(results) : <Typography>No binding site analysis results available.</Typography>;
+      case 'virtual_screening':
+        return results.virtual_screening ? renderVirtualScreeningResults(results.virtual_screening) : <Typography>No virtual screening results available.</Typography>;
+      case 'molecular_dynamics':
+        return results.molecular_dynamics ? renderMDResults(results.molecular_dynamics) : <Typography>No molecular dynamics results available.</Typography>;
+      case 'lead_optimization':
+        return results.lead_optimization ? renderOptimizationResults(results.lead_optimization) : <Typography>No lead optimization results available.</Typography>;
+      default:
+        if (results.structure_preparation || results.STRUCTURE_PREPARATION) return renderStructurePreparation(results);
+        if (results.binding_site_analysis) return renderBindingSites(results.binding_site_analysis);
+        if (results.virtual_screening) return renderVirtualScreeningResults(results.virtual_screening);
+        return <Typography>Select a valid stage to view results.</Typography>;
     }
   };
 
   return (
     <Box sx={{ width: '100%' }}>
       <Paper sx={{ width: '100%', mb: 2 }}>
-        <Tabs
-          value={activeTab}
-          onChange={(e, val) => setActiveTab(val)}
-          variant="fullWidth"
-        >
+        <Tabs value={currentTab} onChange={(e, val) => setCurrentTab(val)} variant="fullWidth">
           <Tab label="Results" />
           <Tab label="Visualization" />
           <Tab label="Analysis" />
-          <Tab label="Binding Sites" />
         </Tabs>
-        <TabPanel value={activeTab} index={0}>
+        <TabPanel value={currentTab} index={0}>
           {renderStageResults()}
         </TabPanel>
-        <TabPanel value={activeTab} index={1}>
+        <TabPanel value={currentTab} index={1}>
           <Box sx={{ height: 400 }}>
-            {stage === 'structure_preparation' ? (
-              // Check if we have the STRUCTURE_PREPARATION data, which means we have a processed structure
-              results && results.STRUCTURE_PREPARATION ? (
-                // Extract the workflow ID from the URL if available
-                <PDBViewer 
-                  workflowId={window.location.pathname.split('/').pop()} 
-                  style={{ width: '100%', height: '100%' }}
-                />
-              ) : (
-                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-                  <Typography variant="body1">
-                    PDB structure visualization will appear here. Please process a structure first.
-                  </Typography>
-                </Box>
-              )
+            {stage === 'structure_preparation' && results?.STRUCTURE_PREPARATION ? (
+              <PDBViewer workflowId={params.id} style={{ width: '100%', height: '100%' }} />
+            ) : stage === 'binding_site_analysis' && (results?.binding_site_analysis || results?.binding_sites) ? (
+              <BindingSite3DViewer workflowId={params.id} bindingSites={results.binding_site_analysis?.binding_sites || results.binding_sites} />
             ) : (
-              <PDBViewer pdbId={results.pdb_id} />
-            )}
-          </Box>
-        </TabPanel>
-        <TabPanel value={activeTab} index={3}>
-          <Box sx={{ height: 400 }}>
-            {(localResults || results) && (localResults?.binding_site_analysis || results?.binding_site_analysis) && 
-             ((localResults?.binding_site_analysis?.binding_sites && localResults.binding_site_analysis.binding_sites.length > 0) ||
-              (results?.binding_site_analysis?.binding_sites && results.binding_site_analysis.binding_sites.length > 0)) ? (
-              <>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                  <Typography variant="h6">
-                    Binding Sites ({(localResults?.binding_site_analysis?.binding_sites?.length || results?.binding_site_analysis?.binding_sites?.length || 0)} detected)
-                  </Typography>
-                  <Button 
-                    variant="contained" 
-                    color="primary" 
-                    size="small"
-                    onClick={async () => {
-                      try {
-                        const response = await fetch(`/api/workflow/${params.id}/direct-binding-site-analysis`, {
-                          method: 'POST',
-                        });
-                        
-                        if (!response.ok) {
-                          throw new Error(`Failed to run binding site analysis: ${response.statusText}`);
-                        }
-                        
-                        const data = await response.json();
-                        console.log('Binding site analysis completed:', data);
-                        
-                        // Update the results state with the new data
-                        setResults(prev => ({
-                          ...prev,
-                          binding_site_analysis: data.binding_site_analysis
-                        }));
-                      } catch (error) {
-                        console.error('Error running binding site analysis:', error);
-                        alert(`Error: ${error.message}`);
-                      }
-                    }}
-                  >
-                    Refresh Analysis
-                  </Button>
-                </Box>
-                <Box sx={{ height: 300, overflow: 'auto' }}>
-                  {renderBindingSites(localResults?.binding_site_analysis || results?.binding_site_analysis)}
-                </Box>
-                <Box sx={{ mt: 2 }}>
-                  <Typography variant="body2" color="text.secondary">
-                    Method: {(localResults?.binding_site_analysis?.method || results?.binding_site_analysis?.method || 'reliable_python')}
-                  </Typography>
-                  {(localResults?.binding_site_analysis?.timestamp || results?.binding_site_analysis?.timestamp) && (
-                    <Typography variant="body2" color="text.secondary">
-                      Generated: {new Date(localResults?.binding_site_analysis?.timestamp || results?.binding_site_analysis?.timestamp).toLocaleString()}
-                    </Typography>
-                  )}
-                </Box>
-              </>
-            ) : (
-              <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-                <Typography variant="body1" sx={{ mb: 3 }}>
-                  No binding site data available. Run binding site analysis to detect potential binding pockets.
-                </Typography>
-                <Button 
-                  variant="contained" 
-                  color="primary"
-                  onClick={async () => {
-                    try {
-                      // Show loading state
-                      setLoading(true);
-                      
-                      const response = await fetch(`/api/workflow/${params.id}/direct-binding-site-analysis`, {
-                        method: 'POST',
-                      });
-                      
-                      if (!response.ok) {
-                        throw new Error(`Failed to run binding site analysis: ${response.statusText}`);
-                      }
-                      
-                      const data = await response.json();
-                      console.log('Binding site analysis completed:', data);
-                      
-                      // Update the local results state with the new data
-                      setLocalResults(prev => ({
-                        ...(prev || {}),
-                        binding_site_analysis: data.binding_site_analysis
-                      }));
-                      
-                      // Hide loading state
-                      setLoading(false);
-                    } catch (error) {
-                      console.error('Error running binding site analysis:', error);
-                      alert(`Error: ${error.message}`);
-                      setLoading(false);
-                    }
-                  }}
-                  disabled={loading}
-                >
-                  {loading ? 'Running Analysis...' : 'Run Binding Site Analysis'}
-                </Button>
+              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                <Typography variant="body1">Visualization will appear here once results are generated.</Typography>
               </Box>
             )}
           </Box>
         </TabPanel>
-        <TabPanel value={activeTab} index={2}>
+        <TabPanel value={currentTab} index={2}>
           {stage === 'structure_preparation' && results?.STRUCTURE_PREPARATION?.descriptors ? (
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Drug-likeness Analysis
-              </Typography>
-              <Typography variant="body1" paragraph>
-                Analysis of the structure based on Lipinski's Rule of Five and other drug-likeness properties:
-              </Typography>
-              
-              <TableContainer component={Paper} sx={{ mb: 3 }}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Property</TableCell>
-                      <TableCell>Value</TableCell>
-                      <TableCell>Preferred Range</TableCell>
-                      <TableCell>Status</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    <TableRow>
-                      <TableCell>Molecular Weight</TableCell>
-                      <TableCell>{results.STRUCTURE_PREPARATION.descriptors.molecular_weight?.toFixed(2)}</TableCell>
-                      <TableCell>&lt; 500 Da</TableCell>
-                      <TableCell>
-                        {results.STRUCTURE_PREPARATION.descriptors.molecular_weight < 500 ? 
-                          '✅ Good' : '⚠️ High'}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>LogP</TableCell>
-                      <TableCell>{results.STRUCTURE_PREPARATION.descriptors.logp?.toFixed(2)}</TableCell>
-                      <TableCell>-0.4 to 5.6</TableCell>
-                      <TableCell>
-                        {(results.STRUCTURE_PREPARATION.descriptors.logp > -0.4 && 
-                         results.STRUCTURE_PREPARATION.descriptors.logp < 5.6) ? 
-                          '✅ Good' : '⚠️ Outside optimal range'}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>H-Bond Donors</TableCell>
-                      <TableCell>{results.STRUCTURE_PREPARATION.descriptors.num_h_donors}</TableCell>
-                      <TableCell>&lt; 5</TableCell>
-                      <TableCell>
-                        {results.STRUCTURE_PREPARATION.descriptors.num_h_donors < 5 ? 
-                          '✅ Good' : '⚠️ High'}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>H-Bond Acceptors</TableCell>
-                      <TableCell>{results.STRUCTURE_PREPARATION.descriptors.num_h_acceptors}</TableCell>
-                      <TableCell>&lt; 10</TableCell>
-                      <TableCell>
-                        {results.STRUCTURE_PREPARATION.descriptors.num_h_acceptors < 10 ? 
-                          '✅ Good' : '⚠️ High'}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Rotatable Bonds</TableCell>
-                      <TableCell>{results.STRUCTURE_PREPARATION.descriptors.num_rotatable_bonds}</TableCell>
-                      <TableCell>&lt; 10</TableCell>
-                      <TableCell>
-                        {results.STRUCTURE_PREPARATION.descriptors.num_rotatable_bonds < 10 ? 
-                          '✅ Good' : '⚠️ High'}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>TPSA</TableCell>
-                      <TableCell>{results.STRUCTURE_PREPARATION.descriptors.tpsa?.toFixed(2)}</TableCell>
-                      <TableCell>&lt; 140 Å²</TableCell>
-                      <TableCell>
-                        {results.STRUCTURE_PREPARATION.descriptors.tpsa < 140 ? 
-                          '✅ Good' : '⚠️ High'}
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </TableContainer>
-              
-              <Typography variant="body1" sx={{ mt: 2 }}>
-                Note: This is a protein structure, so drug-likeness rules (which are designed for small molecules) 
-                may not apply directly. The analysis is provided for reference purposes.
-              </Typography>
-            </Box>
+            <p>Structure Analysis / Drug-likeness content goes here.</p>
           ) : (
-            <Typography>No analysis data available</Typography>
-          )}
-        </TabPanel>
-        <TabPanel value={activeTab} index={3}>
-          {stage === 'structure_preparation' && results?.STRUCTURE_PREPARATION ? (
-            <BindingSiteViewer 
-              workflowId={window.location.pathname.split('/').pop()} 
-              pdbUrl={`/api/workflow/${window.location.pathname.split('/').pop()}/processed-structure`}
-              style={{ width: '100%' }}
-            />
-          ) : (
-            <Typography>Binding site analysis is only available after structure preparation</Typography>
+            <Typography>No analysis data available for this stage.</Typography>
           )}
         </TabPanel>
       </Paper>
     </Box>
   );
 }
+

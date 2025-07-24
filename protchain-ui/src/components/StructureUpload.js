@@ -43,126 +43,38 @@ export default function StructureUpload({ onUploadComplete, workflowId }) {
     formData.append('file', file);
 
     try {
-      // Upload the structure file
+      // Upload the structure file and get immediate results
       const response = await fetch(`/api/workflow/${workflowId}/structure`, {
         method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error('Failed to upload structure file');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to process structure file');
       }
 
       const data = await response.json();
-      console.log('Structure upload response:', data);
+      console.log('Structure processing completed with data:', data);
       
-      // Poll for structure processing completion
-      await pollStructureStatus();
-      
-      // Structure processing completed successfully
-      onUploadComplete(data);
+      // The API returns results immediately, no polling needed
+      // Check for real bioapi response format: {details: {descriptors: {...}}}
+      if (data && data.details && data.details.descriptors) {
+        console.log('✅ Structure analysis successful, calling onUploadComplete with:', data);
+        onUploadComplete({
+          status: 'success',
+          ...data
+        });
+      } else {
+        console.error('❌ Unexpected API response format:', data);
+        throw new Error('No structure analysis results received. Expected format: {details: {descriptors: {...}}}');
+      }
     } catch (err) {
-      console.error('Structure upload error:', err);
+      console.error('Structure processing error:', err);
       setError(err.message);
     } finally {
       setUploading(false);
     }
-  };
-  
-  // Function to poll the structure processing status
-  const pollStructureStatus = async () => {
-    const maxAttempts = 60; // Increased maximum number of polling attempts (2 minutes total)
-    const pollInterval = 2000; // Polling interval in milliseconds
-    let attempts = 0;
-    
-    return new Promise((resolve, reject) => {
-      const checkStatus = async () => {
-        try {
-          const statusResponse = await fetch(`/api/workflow/${workflowId}/structure-status`);
-          
-          if (!statusResponse.ok) {
-            throw new Error('Failed to check structure processing status');
-          }
-          
-          const statusData = await statusResponse.json();
-          console.log('Structure processing status:', statusData);
-          
-          if (statusData.status === 'COMPLETED') {
-            // Structure processing completed successfully, now fetch the actual results
-            try {
-              console.log('Structure processing completed, fetching results...');
-              const resultsResponse = await fetch(`/api/workflow/${workflowId}/refresh-results`);
-              if (resultsResponse.ok) {
-                const resultsData = await resultsResponse.json();
-                console.log('Successfully fetched results:', resultsData);
-                resolve(resultsData);
-                return;
-              } else {
-                console.error('Failed to fetch results:', resultsResponse.status);
-                // Fall back to status data if results fetch fails
-                resolve(statusData);
-                return;
-              }
-            } catch (resultsErr) {
-              console.error('Error fetching results:', resultsErr);
-              // Fall back to status data if results fetch fails
-              resolve(statusData);
-              return;
-            }
-          } else if (statusData.status === 'ERROR') {
-            // Structure processing failed
-            reject(new Error(statusData.message || 'Structure processing failed'));
-            return;
-          }
-          
-          // Continue polling if not completed or errored
-          attempts++;
-          
-          // Update the UI with progress information
-          if (attempts % 5 === 0) { // Every 10 seconds
-            setError(`Processing structure... (${attempts}/${maxAttempts})`);
-          }
-          
-          if (attempts >= maxAttempts) {
-            // Try one last time to fetch results directly before giving up
-            try {
-              const resultsResponse = await fetch(`/api/workflow/${workflowId}/refresh-results`);
-              if (resultsResponse.ok) {
-                const resultsData = await resultsResponse.json();
-                if (resultsData && (resultsData.STRUCTURE_PREPARATION || resultsData.structure_preparation)) {
-                  console.log('Found results despite timeout, continuing');
-                  resolve(resultsData);
-                  return;
-                }
-              }
-            } catch (lastAttemptErr) {
-              console.error('Last attempt to fetch results failed:', lastAttemptErr);
-            }
-            
-            reject(new Error('Structure processing timed out. The PDB file may be too large or complex.'));
-            return;
-          }
-          
-          // Schedule next polling attempt
-          setTimeout(checkStatus, pollInterval);
-        } catch (err) {
-          console.error('Error checking structure status:', err);
-          
-          // Don't immediately reject on network errors, try again
-          attempts++;
-          if (attempts >= maxAttempts) {
-            reject(new Error('Structure processing checks failed too many times'));
-            return;
-          }
-          
-          // Schedule next polling attempt despite error
-          setTimeout(checkStatus, pollInterval);
-        }
-      };
-      
-      // Start polling
-      checkStatus();
-    });
   };
 
   const handlePdbSearch = async () => {
@@ -197,16 +109,21 @@ export default function StructureUpload({ onUploadComplete, workflowId }) {
       }
 
       const data = await uploadResponse.json();
-      console.log('Structure upload response:', data);
+      console.log('Structure processing completed with data:', data);
       
-      // Poll for structure processing completion
-      await pollStructureStatus();
-      
-      // Structure processing completed successfully
-      onUploadComplete({
-        ...data,
-        metadata: response.metadata.payload
-      });
+      // The API returns results immediately, no polling needed
+      // Check for real bioapi response format: {details: {descriptors: {...}}}
+      if (data && data.details && data.details.descriptors) {
+        console.log('✅ PDB structure analysis successful, calling onUploadComplete with:', data);
+        onUploadComplete({
+          status: 'success',
+          ...data,
+          metadata: response.metadata.payload
+        });
+      } else {
+        console.error('❌ Unexpected PDB API response format:', data);
+        throw new Error('No structure analysis results received. Expected format: {details: {descriptors: {...}}}');
+      }
     } catch (err) {
       console.error('PDB search error:', err);
       setError(err.message);

@@ -13,6 +13,51 @@ const nextConfig = {
       },
     ]
   },
+  webpack: (config, { isServer }) => {
+    // Fix for electron-fetch and other electron modules in browser
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        electron: false,
+        fs: false,
+        net: false,
+        tls: false,
+        crypto: false,
+        stream: false,
+        http: false,
+        https: false,
+        os: false,
+        url: false,
+        assert: false,
+      };
+      
+      // Add module resolution aliases to prevent electron-fetch from loading
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'electron-fetch': false,
+        'electron': false,
+      };
+    }
+    
+    // Exclude problematic modules from bundling
+    config.externals = config.externals || [];
+    if (!isServer) {
+      config.externals.push({
+        electron: 'electron',
+        'electron-fetch': 'electron-fetch',
+      });
+    }
+    
+    // Ignore specific modules that cause issues
+    config.plugins = config.plugins || [];
+    config.plugins.push(
+      new config.webpack.IgnorePlugin({
+        resourceRegExp: /^electron$/,
+      })
+    );
+    
+    return config;
+  },
 }
 
 module.exports = nextConfig

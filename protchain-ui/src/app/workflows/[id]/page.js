@@ -17,14 +17,17 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import WorkflowRunHistory from '@/components/workflow-run-history';
 import WorkflowStages from '@/components/WorkflowStages';
+import WorkflowResults from '@/components/WorkflowResults';
 
 export default function WorkflowDetailsPage() {
   const params = useParams();
   const { id } = params;
   const [workflow, setWorkflow] = useState(null);
   const [runs, setRuns] = useState([]);
+  const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -36,10 +39,11 @@ export default function WorkflowDetailsPage() {
         const token = localStorage.getItem('token');
         const headers = { 'Authorization': `Bearer ${token}` };
 
-        // Fetch both in parallel
-        const [workflowRes, runsRes] = await Promise.all([
+        // Fetch workflow, runs, and results in parallel
+        const [workflowRes, runsRes, resultsRes] = await Promise.all([
           fetch(`/api/v1/workflows/${id}`, { headers }),
-          fetch(`/api/v1/workflows/${id}/runs`, { headers })
+          fetch(`/api/v1/workflows/${id}/runs`, { headers }),
+          fetch(`/api/workflow/${id}/refresh-results`, { headers })
         ]);
 
         // Process workflow response
@@ -58,6 +62,24 @@ export default function WorkflowDetailsPage() {
         const runsData = await runsRes.json();
         setRuns(runsData.data || []);
 
+        // Process results response (optional - may not exist for all workflows)
+        if (resultsRes.ok) {
+          try {
+            const resultsData = await resultsRes.json();
+            console.log('Loaded workflow results:', resultsData);
+            // The results are nested inside the 'details' property from bioapi
+            // and the refresh-results endpoint passes the whole object.
+            // We only need the core results object for the component.
+            setResults(resultsData.details ? resultsData : null);
+          } catch (resultsErr) {
+            console.log('No results available for this workflow yet:', resultsErr);
+            setResults(null);
+          }
+        } else {
+          console.log('Results response not ok:', resultsRes.status, resultsRes.statusText);
+          setResults(null);
+        }
+
       } catch (err) {
         console.error('Error fetching workflow data:', err);
         setError(err.message);
@@ -68,6 +90,8 @@ export default function WorkflowDetailsPage() {
 
     fetchWorkflowAndRuns();
   }, [id]);
+
+  // Note: Removed polling mechanism - we now handle results directly from StructureUpload component
 
   if (loading) {
     return (
@@ -119,6 +143,35 @@ export default function WorkflowDetailsPage() {
     // Handle virtual screening completion
   };
 
+  const handleStructureAnalysisStart = () => {
+    console.log('Structure analysis started...');
+    setIsProcessing(true);
+  };
+
+  const handleStructureAnalysisComplete = (data) => {
+    console.log('🎉 Structure analysis completed! Received data:', JSON.stringify(data, null, 2));
+    setIsProcessing(false);
+    
+    // Set the results directly from the structure upload component
+    if (data && data.details && data.details.descriptors) {
+      console.log('✅ Valid bioapi format detected, setting results state...');
+      console.log('🔄 BEFORE setResults - current results state:', results);
+      setResults(data);
+      console.log('✅ Results state updated with structure data:', JSON.stringify(data, null, 2));
+      console.log('🚀 UI should now automatically re-render with new results!');
+      
+      // Force a small delay to ensure state update is processed
+      setTimeout(() => {
+        console.log('🔍 AFTER setResults - results should now be visible in UI');
+      }, 100);
+    } else {
+      console.error('❌ Invalid structure data received. Expected {details: {descriptors: {...}}} but got:', JSON.stringify(data, null, 2));
+      console.error('❌ Data type:', typeof data);
+      console.error('❌ Has details?', !!(data && data.details));
+      console.error('❌ Has descriptors?', !!(data && data.details && data.details.descriptors));
+    }
+  };
+
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       <Button
@@ -151,7 +204,31 @@ export default function WorkflowDetailsPage() {
               workflow={workflow} 
               onStageClick={handleStageClick}
               onVirtualScreeningComplete={handleVirtualScreeningComplete} 
+              onStructureAnalysisStart={handleStructureAnalysisStart}
+              onStructureAnalysisComplete={handleStructureAnalysisComplete}
             />
+          </Paper>
+        </Grid>
+        
+        <Grid item xs={12}>
+          <Paper sx={{ p: 3 }}>
+            <Typography variant="h5" component="h2" gutterBottom>
+              Analysis Results
+            </Typography>
+            {loading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                <CircularProgress />
+              </Box>
+            ) : results ? (
+              <>
+                {console.log('Results data being passed to WorkflowResults:', JSON.stringify(results, null, 2))}
+                <WorkflowResults results={results} stage="structure_preparation" />
+              </>
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                No analysis results available yet. Process a structure to see results here.
+              </Typography>
+            )}
           </Paper>
         </Grid>
         

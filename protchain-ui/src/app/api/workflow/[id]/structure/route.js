@@ -46,7 +46,7 @@ export async function POST(request, context) {
 
     // Process structure directly using bioapi structure endpoint (no workflow registration needed)
     const bioApiUrl = process.env.BIOAPI_URL || 'http://localhost:8000';
-    const containerFilePath = join('/uploads', id, 'input.pdb').replace(/\\/g, '/');
+    const containerFilePath = join('/app/uploads', id, 'input.pdb').replace(/\\/g, '/');
     
     try {
       console.log('Calling bioapi structure endpoint:', `${bioApiUrl}/api/v1/workflows/${id}/structure`);

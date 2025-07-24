@@ -50,7 +50,7 @@ const stages = [
   },
 ];
 
-export default function WorkflowStages({ workflow, onStageClick, onVirtualScreeningComplete }) {
+export default function WorkflowStages({ workflow, onStageClick, onVirtualScreeningComplete, onStructureAnalysisStart, onStructureAnalysisComplete }) {
   const getStageStatus = (index) => {
     if (!workflow || !workflow.steps) return 'pending';
     const stageName = stages[index].label.toLowerCase().replace(' ', '_');
@@ -165,6 +165,14 @@ export default function WorkflowStages({ workflow, onStageClick, onVirtualScreen
                     <StructureUpload 
                       workflowId={workflow.id} 
                       onUploadComplete={(data) => {
+                        console.log('🔄 StructureUpload completed, data received in WorkflowStages:', data);
+                        
+                        // Call the completion handler to update main page state
+                        if (onStructureAnalysisComplete && data.status === 'success') {
+                          onStructureAnalysisComplete(data);
+                        }
+                        
+                        // Also update the workflow stage state
                         if (data.status === 'success') {
                           onStageClick(stageKey, { ...stageData, results: data });
                         }
