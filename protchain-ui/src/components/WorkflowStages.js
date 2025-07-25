@@ -52,7 +52,46 @@ export default function WorkflowStages({
             setCompletedStages(new Set(data.completed_stages));
           }
           
-          console.log('Workflow state updated:', data);
+          // Check for blockchain commits in localStorage (stage-specific)
+          const recentCommits = JSON.parse(localStorage.getItem('recentBlockchainCommits') || '{}');
+          console.log('DEBUG: recentCommits from localStorage:', recentCommits);
+          console.log('DEBUG: recentCommits for workflowId:', recentCommits[workflowId]);
+          
+          if (recentCommits[workflowId]) {
+            // Store stage-specific blockchain data
+            data.blockchainByStage = recentCommits[workflowId];
+            console.log('DEBUG: blockchainByStage set to:', data.blockchainByStage);
+            
+            // Add general blockchain data for backward compatibility (use structure_preparation as default)
+            if (recentCommits[workflowId].structure_preparation) {
+              data.blockchain = {
+                transaction_hash: recentCommits[workflowId].structure_preparation.txHash,
+                ipfs_hash: recentCommits[workflowId].structure_preparation.ipfsHash,
+                timestamp: recentCommits[workflowId].structure_preparation.timestamp
+              };
+            }
+            
+            setWorkflowData({...data});
+            
+            // Mark stages as completed based on their blockchain commits
+            const newCompletedStages = new Set(data.completed_stages || []);
+            
+            if (recentCommits[workflowId].structure_preparation) {
+              newCompletedStages.add('structure_preparation');
+            }
+            
+            if (recentCommits[workflowId].binding_site_analysis) {
+              newCompletedStages.add('binding_site_analysis');
+              
+              // Auto-advance to next stage (Virtual Screening) after binding site analysis
+              if (data.stage === 'binding_site_analysis') {
+                data.stage = 'virtual_screening';
+                setWorkflowData({...data});
+              }
+            }
+            
+            setCompletedStages(newCompletedStages);
+          }
         }
       } catch (error) {
         console.error('Failed to fetch workflow state:', error);
@@ -303,38 +342,51 @@ export default function WorkflowStages({
               {stage.description}
             </Typography>
             
-            {/* Show blockchain/IPFS verification links for completed stages */}
-            {isCompleted && workflowData?.blockchain && (
+            {/* Show blockchain/IPFS verification links for completed stages (stage-specific) */}
+            {console.log(`DEBUG: Stage ${stage.id} - isCompleted:`, isCompleted, 'blockchainByStage:', workflowData?.blockchainByStage, 'stage data:', workflowData?.blockchainByStage?.[stage.id])}
+            {isCompleted && (workflowData?.blockchainByStage?.[stage.id] || workflowData?.blockchain) && (
               <Box sx={{ mb: 2 }}>
                 <Typography variant="body2" color="success.main" sx={{ mb: 1, fontWeight: 'bold' }}>
                   ✓ Blockchain Verified
                 </Typography>
-                {workflowData.blockchain.transaction_hash && (
-                  <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-                    <strong>Tx Hash:</strong> 
-                    <a 
-                      href={`https://purechainnode.com:8547/tx/${workflowData.blockchain.transaction_hash}`}
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      style={{ color: '#1976d2', textDecoration: 'none' }}
-                    >
-                      {workflowData.blockchain.transaction_hash.substring(0, 10)}...
-                    </a>
-                  </Typography>
-                )}
-                {workflowData.blockchain.ipfs_hash && (
-                  <Typography variant="caption" sx={{ display: 'block' }}>
-                    <strong>IPFS:</strong> 
-                    <a 
-                      href={`http://localhost:8080/ipfs/${workflowData.blockchain.ipfs_hash}`}
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      style={{ color: '#1976d2', textDecoration: 'none' }}
-                    >
-                      {workflowData.blockchain.ipfs_hash.substring(0, 10)}...
-                    </a>
-                  </Typography>
-                )}
+                {/* Display stage-specific blockchain data if available, otherwise use fallback */}
+                {(() => {
+                  const stageData = workflowData?.blockchainByStage?.[stage.id];
+                  const fallbackData = workflowData?.blockchain;
+                  const txHash = stageData?.txHash || fallbackData?.transaction_hash;
+                  const ipfsHash = stageData?.ipfsHash || fallbackData?.ipfs_hash;
+                  
+                  return (
+                    <>
+                      {txHash && (
+                        <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                          <strong>Tx Hash:</strong> 
+                          <a 
+                            href={`https://purechainnode.com:8547/tx/${txHash}`}
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            style={{ color: '#1976d2', textDecoration: 'none' }}
+                          >
+                            {txHash.substring(0, 10)}...
+                          </a>
+                        </Typography>
+                      )}
+                      {ipfsHash && (
+                        <Typography variant="caption" sx={{ display: 'block' }}>
+                          <strong>IPFS:</strong> 
+                          <a 
+                            href={`http://localhost:8080/ipfs/${ipfsHash}`}
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            style={{ color: '#1976d2', textDecoration: 'none' }}
+                          >
+                            {ipfsHash.substring(0, 10)}...
+                          </a>
+                        </Typography>
+                      )}
+                    </>
+                  );
+                })()}
               </Box>
             )}
             

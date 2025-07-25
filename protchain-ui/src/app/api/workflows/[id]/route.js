@@ -70,6 +70,24 @@ export async function GET(request, { params }) {
       console.log('DEBUG: Results file does not exist');
     }
     
+    // Check binding site analysis completion
+    const bindingSiteResultsPath = path.join(uploadsDir, 'binding_site_results.json');
+    if (fs.existsSync(bindingSiteResultsPath)) {
+      try {
+        const bindingSiteData = JSON.parse(fs.readFileSync(bindingSiteResultsPath, 'utf8'));
+        console.log('DEBUG: bindingSiteData found:', !!bindingSiteData.binding_sites);
+        
+        if (bindingSiteData.binding_sites && bindingSiteData.binding_sites.length > 0) {
+          completedStages.push('binding_site_analysis');
+          stageResults.binding_site_analysis = bindingSiteData;
+          currentStage = 'virtual_screening';
+          console.log('DEBUG: Added binding_site_analysis to completed stages');
+        }
+      } catch (error) {
+        console.error('Error reading binding site results file:', error);
+      }
+    }
+    
     // Check for blockchain/IPFS verification data
     const blockchainPath = path.join(uploadsDir, 'blockchain.json');
     if (fs.existsSync(blockchainPath)) {

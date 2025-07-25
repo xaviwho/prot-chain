@@ -23,6 +23,7 @@ import {
 } from '@mui/material';
 import { ExpandMore, Download, HourglassEmpty, ErrorOutline } from '@mui/icons-material';
 import { saveAs } from 'file-saver';
+import ProteinViewer3D from './ProteinViewer3D';
 
 function TabPanel({ children, value, index }) {
   return (
@@ -182,16 +183,23 @@ function WorkflowResults({ results, stage, activeTab = 0, workflow = null }) {
       setBlockchainTxHash(blockchainData.transactionHash);
       setBlockchainCommitted(true);
       
-      // Store commit info in localStorage for immediate display in WorkflowStages
+      // Store commit info in localStorage with stage-specific keys for unique hashes
       const recentCommits = JSON.parse(localStorage.getItem('recentBlockchainCommits') || '{}');
-      recentCommits[params.id] = {
+      const stageKey = `${params.id}_${stage}`; // Use stage-specific key
+      
+      if (!recentCommits[params.id]) {
+        recentCommits[params.id] = {};
+      }
+      
+      recentCommits[params.id][stage] = {
         txHash: blockchainData.transactionHash,
         ipfsHash: ipfsData.hash,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        stage: stage
       };
       localStorage.setItem('recentBlockchainCommits', JSON.stringify(recentCommits));
       
-      console.log('Stored blockchain commit info in localStorage:', recentCommits[params.id]);
+      console.log(`Stored blockchain commit info for ${stage}:`, recentCommits[params.id][stage]);
     } catch (error) {
       console.error('Error committing to blockchain:', error);
       alert('Failed to commit results to blockchain: ' + error.message);
@@ -413,6 +421,14 @@ function WorkflowResults({ results, stage, activeTab = 0, workflow = null }) {
             </Table>
           </TableContainer>
 
+          {/* 3D Protein Structure Visualization */}
+          <Box sx={{ mt: 4, mb: 3 }}>
+            <ProteinViewer3D 
+              workflowId={params?.id} 
+              stage="structure" 
+            />
+          </Box>
+
           <Box sx={{ mt: 3 }}>
             <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 3 }}>
               <Button
@@ -539,47 +555,13 @@ function WorkflowResults({ results, stage, activeTab = 0, workflow = null }) {
           Binding Site Analysis Results
         </Typography>
 
-        <Paper sx={{ p: 0, mb: 4, borderRadius: 2, overflow: 'hidden' }}>
-          {/* Clean Molecular Structure Viewer - No decorative elements */}
-          <Box sx={{ 
-            height: '600px',
-            backgroundColor: '#000',
-            position: 'relative'
-          }}>
-            {/* 3Dmol.js Protein Structure Viewer - Full container */}
-            <div 
-              id={`molviewer-${params.id}`}
-              style={{
-                width: '100%',
-                height: '100%',
-                backgroundColor: '#000'
-              }}
-            />
-            
-            {/* Minimal loading indicator - hidden once structure loads */}
-            <Box 
-              data-loading-overlay
-              sx={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: '#000',
-                zIndex: 1
-              }}>
-              <Box sx={{
-                fontSize: '3rem',
-                opacity: 0.3,
-                color: '#666'
-              }}>
-                ●
-              </Box>
-            </Box>
-          </Box>
+        {/* 3D Protein Structure with Binding Sites */}
+        <Paper sx={{ p: 3, mb: 4, borderRadius: 2 }}>
+          <ProteinViewer3D 
+            workflowId={params?.id} 
+            stage="binding_sites" 
+            bindingSites={bindingSites}
+          />
         </Paper>
 
         <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', mb: 2 }}>
