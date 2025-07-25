@@ -154,31 +154,75 @@ export default function BindingSite3DViewer({ workflowId, bindingSites = [] }) {
         comp.removeRepresentation(comp.reprList.filter(repr => repr.name.includes('binding-site')));
       });
       
-      // Create a selection for the binding site residues
-      const residueSelection = selectedSite.residues.map(res => 
-        `${res.number}:${res.chain}`
-      ).join(' or ');
+      // Handle different binding site data formats
+      console.log('Selected binding site data:', selectedSite);
       
-      if (!residueSelection) return;
+      let residueSelection = '';
       
-      // Add binding site representation
-      const representation = viewerRef.current.addRepresentation(bindingSiteStyle, {
-        sele: residueSelection,
-        color: theme.palette.primary.main,
-        opacity: opacity,
-        name: 'binding-site'
-      });
+      // Check if residues exist and have the expected format
+      if (selectedSite.residues && Array.isArray(selectedSite.residues)) {
+        // Handle bioapi format: residues with res_name, chain_id, res_num
+        if (selectedSite.residues.length > 0 && selectedSite.residues[0].res_num) {
+          residueSelection = selectedSite.residues.map(res => 
+            `${res.res_num}:${res.chain_id || 'A'}`
+          ).join(' or ');
+        }
+        // Handle alternative format: residues with number, chain
+        else if (selectedSite.residues.length > 0 && selectedSite.residues[0].number) {
+          residueSelection = selectedSite.residues.map(res => 
+            `${res.number}:${res.chain || 'A'}`
+          ).join(' or ');
+        }
+      }
       
-      // Create a sphere at the binding site center
-      const shape = new window.NGL.Shape('binding-site-center');
-      shape.addSphere([selectedSite.center.x, selectedSite.center.y, selectedSite.center.z], 
-                      theme.palette.secondary.main, 1.5);
+      console.log('Generated residue selection:', residueSelection);
       
-      const shapeComp = viewer.addComponentFromObject(shape);
-      shapeComp.addRepresentation('buffer');
+      // Add binding site representation if we have residues
+      if (residueSelection) {
+        try {
+          const representation = viewerRef.current.addRepresentation(bindingSiteStyle, {
+            sele: residueSelection,
+            color: theme.palette.primary.main,
+            opacity: opacity,
+            name: 'binding-site'
+          });
+          console.log('Added binding site representation');
+        } catch (error) {
+          console.error('Error adding binding site representation:', error);
+        }
+      }
       
-      // Focus on the binding site
-      viewer.autoView(residueSelection);
+      // Create a sphere at the binding site center if center exists
+      if (selectedSite.center) {
+        try {
+          const shape = new window.NGL.Shape('binding-site-center');
+          shape.addSphere(
+            [selectedSite.center.x, selectedSite.center.y, selectedSite.center.z], 
+            theme.palette.secondary.main, 
+            2.0
+          );
+          
+          const shapeComp = viewer.addComponentFromObject(shape);
+          shapeComp.addRepresentation('buffer');
+          console.log('Added binding site center sphere');
+        } catch (error) {
+          console.error('Error adding binding site center:', error);
+        }
+      }
+      
+      // Focus on the binding site if we have a selection
+      if (residueSelection) {
+        try {
+          viewer.autoView(residueSelection);
+        } catch (error) {
+          console.error('Error focusing on binding site:', error);
+          // Fallback: just auto view the entire structure
+          viewer.autoView();
+        }
+      } else {
+        // No specific residues, just auto view the structure
+        viewer.autoView();
+      }
       
     } catch (error) {
       console.error('Error visualizing binding site:', error);

@@ -279,6 +279,60 @@ export default function WorkflowStages({
     }
   };
 
+  const handleVirtualScreening = async () => {
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      console.log('Starting REAL virtual screening for workflow:', workflowId);
+      
+      const response = await fetch(`/api/workflow/${workflowId}/virtual-screening`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          compound_library: 'fda_approved',
+          max_compounds: 50
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Virtual screening failed: ${response.statusText}`);
+      }
+
+      const results = await response.json();
+      console.log('REAL virtual screening results:', results);
+      
+      setSuccess(`Virtual screening completed! Found ${results.hits_found || 0} promising compounds.`);
+      setCompletedStages(prev => new Set([...prev, 'virtual_screening']));
+      
+      // Refresh workflow state to update progress immediately
+      try {
+        const workflowResponse = await fetch(`/api/workflows/${workflowId}`);
+        if (workflowResponse.ok) {
+          const updatedWorkflowData = await workflowResponse.json();
+          setWorkflowData(updatedWorkflowData);
+          
+          if (updatedWorkflowData.completed_stages) {
+            setCompletedStages(new Set(updatedWorkflowData.completed_stages));
+          }
+          
+          console.log('Workflow state refreshed after virtual screening:', updatedWorkflowData);
+        }
+      } catch (refreshError) {
+        console.error('Failed to refresh workflow state:', refreshError);
+      }
+      
+    } catch (err) {
+      console.error('Virtual screening error:', err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleStageAction = async (stageId) => {
     switch (stageId) {
       case 'structure_preparation':
@@ -288,6 +342,8 @@ export default function WorkflowStages({
         await handleBindingSiteAnalysis();
         break;
       case 'virtual_screening':
+        await handleVirtualScreening();
+        break;
       case 'molecular_dynamics':
       case 'lead_optimization':
         setError(`${stages.find(s => s.id === stageId)?.title} is not yet implemented`);

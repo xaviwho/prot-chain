@@ -23,7 +23,9 @@ import {
 } from '@mui/material';
 import { ExpandMore, Download, HourglassEmpty, ErrorOutline } from '@mui/icons-material';
 import { saveAs } from 'file-saver';
-import ProteinViewer3D from './ProteinViewer3D';
+// Removed BindingSite3DViewer import to prevent conflicts
+// import BindingSite3DViewer from './BindingSite3DViewer';
+// import ProteinViewer from './ProteinViewer';
 
 function TabPanel({ children, value, index }) {
   return (
@@ -60,80 +62,136 @@ function WorkflowResults({ results, stage, activeTab = 0, workflow = null }) {
   console.log('  - results is null?', results === null);
   console.log('  - results is undefined?', results === undefined);
 
-  // Initialize 3Dmol.js viewer for protein structure visualization
+  // Initialize 3Dmol.js viewer for binding site visualization
   useEffect(() => {
-    if (stage !== 'binding_site_analysis' && stage !== 'completed') return;
+    if (stage !== 'binding_site_analysis') return;
     if (!results?.binding_sites && !results?.binding_site_analysis?.binding_sites) return;
+    if (!params?.id) return;
 
-    const scriptId = '3dmol-script';
-    let script = document.getElementById(scriptId);
-    if (!script) {
-        script = document.createElement('script');
-        script.id = scriptId;
-        script.src = 'https://3dmol.csb.pitt.edu/build/3Dmol-min.js';
-        script.async = true;
-        document.head.appendChild(script);
-    }
+    console.log('Initializing 3D viewer for binding site analysis');
 
-    const initializeViewer = () => {
+    const loadAndInitialize3D = async () => {
+      try {
+        // Load 3Dmol.js if not already loaded
+        if (!window.$3Dmol) {
+          const script = document.createElement('script');
+          script.src = 'https://3dmol.csb.pitt.edu/build/3Dmol-min.js';
+          script.async = true;
+          document.head.appendChild(script);
+          
+          await new Promise((resolve, reject) => {
+            script.onload = resolve;
+            script.onerror = reject;
+          });
+        }
+
+        // Get the viewer container
         const viewerElement = document.getElementById(`molviewer-${params.id}`);
-        if (!viewerElement || typeof window.$3Dmol === 'undefined') {
-            setTimeout(initializeViewer, 250);
-            return;
+        if (!viewerElement) {
+          console.error('Viewer container not found');
+          return;
         }
 
-        if (viewerRef.current) {
-            viewerRef.current.clear();
-        }
+        // Clear any existing content
         viewerElement.innerHTML = '';
 
-        const loadingOverlay = viewerElement.parentElement?.querySelector('[data-loading-overlay]');
-        if (loadingOverlay) loadingOverlay.style.display = 'flex';
+        // Fetch the PDB structure
+        console.log('Fetching PDB structure...');
+        const response = await fetch(`/api/workflow/${params.id}/processed-structure`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch PDB: ${response.statusText}`);
+        }
+        
+        const pdbData = await response.text();
+        if (!pdbData || !pdbData.trim()) {
+          throw new Error('Empty PDB data received');
+        }
 
-        fetch(`/api/workflows/${params.id}/pdb`)
-            .then(response => {
-                if (!response.ok) throw new Error(`Failed to fetch PDB file: ${response.statusText}`);
-                return response.text();
-            })
-            .then(pdbData => {
-                if (!pdbData || !pdbData.trim().startsWith('HEADER')) throw new Error('Invalid or empty PDB data received.');
-                
-                const viewer = window.$3Dmol.createViewer(viewerElement, { backgroundColor: 'black' });
-                viewer.addModel(pdbData, 'pdb');
-                viewer.setStyle({}, { cartoon: { color: 'spectrum' } });
+        console.log('Creating 3D viewer...');
+        // Create the 3D viewer
+        const viewer = window.$3Dmol.createViewer(viewerElement, { 
+          backgroundColor: 'white',
+          antialias: true
+        });
+        
+        // Add the protein model
+        viewer.addModel(pdbData, 'pdb');
+        
+        // Set protein style
+        viewer.setStyle({}, { cartoon: { color: 'spectrum' } });
 
-                const bindingSites = results?.binding_site_analysis?.binding_sites || results?.binding_sites || [];
-                if (bindingSites.length > 0) {
-                    bindingSites.forEach(site => {
-                        const residueIds = site.residues.map(r => parseInt(r.split(' ')[1])).filter(id => !isNaN(id));
-                        if (residueIds.length > 0) {
-                            viewer.addStyle({resi: residueIds}, {sphere: {color: 'red', radius: 0.7, alpha: 0.9}});
-                        }
-                    });
-                }
-
-                viewer.zoomTo();
-                viewer.render();
-                viewerRef.current = viewer;
-                if (loadingOverlay) setTimeout(() => { loadingOverlay.style.display = 'none'; }, 100);
-            })
-            .catch(error => {
-                console.error('Error initializing 3D viewer:', error);
-                if (viewerElement) {
-                    viewerElement.innerHTML = `<div style="padding: 20px; text-align: center; color: #ff8a80;"><strong>Error:</strong> ${error.message}</div>`;
-                }
-                if (loadingOverlay) loadingOverlay.style.display = 'none';
+        // Get binding sites data
+        const bindingSites = results?.binding_site_analysis?.binding_sites || results?.binding_sites || [];
+        console.log('Adding binding sites to viewer:', bindingSites.length);
+        
+        // Highlight binding sites
+        bindingSites.forEach((site, index) => {
+          if (site.residues && Array.isArray(site.residues)) {
+            let residueIds = [];
+            
+            // Handle different residue formats
+            site.residues.forEach(residue => {
+              if (residue.res_num) {
+                residueIds.push(parseInt(residue.res_num));
+              } else if (typeof residue === 'string') {
+                const parts = residue.split(' ');
+                const resNum = parseInt(parts[parts.length - 1]);
+                if (!isNaN(resNum)) residueIds.push(resNum);
+              }
             });
+            
+            if (residueIds.length > 0) {
+              console.log(`Highlighting binding site ${index + 1} with residues:`, residueIds);
+              // Add red spheres for binding site residues
+              viewer.addStyle(
+                { resi: residueIds }, 
+                { sphere: { color: 'red', radius: 0.8, alpha: 0.8 } }
+              );
+              // Add sticks for better visibility
+              viewer.addStyle(
+                { resi: residueIds }, 
+                { stick: { color: 'red', radius: 0.3 } }
+              );
+            }
+          }
+          
+          // Add center sphere if available
+          if (site.center) {
+            viewer.addSphere({
+              center: { x: site.center.x, y: site.center.y, z: site.center.z },
+              radius: 2.0,
+              color: 'yellow',
+              alpha: 0.7
+            });
+          }
+        });
+
+        // Render and zoom
+        viewer.zoomTo();
+        viewer.render();
+        
+        console.log('3D viewer initialized successfully');
+        
+      } catch (error) {
+        console.error('Error initializing 3D viewer:', error);
+        const viewerElement = document.getElementById(`molviewer-${params.id}`);
+        if (viewerElement) {
+          viewerElement.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #f44336;">
+              <div style="font-size: 48px; margin-bottom: 16px;">⚠️</div>
+              <div style="font-weight: bold; margin-bottom: 8px;">3D Viewer Error</div>
+              <div style="text-align: center; max-width: 400px;">${error.message}</div>
+              <button onclick="window.location.reload()" style="margin-top: 16px; padding: 8px 16px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer;">Retry</button>
+            </div>
+          `;
+        }
+      }
     };
 
-    if (window.$3Dmol) {
-        initializeViewer();
-    } else {
-        script.onload = initializeViewer;
-        script.onerror = () => console.error('Failed to load 3Dmol.js script.');
-    }
+    // Small delay to ensure DOM is ready
+    setTimeout(loadAndInitialize3D, 100);
 
-  }, [stage, results, params.id]);
+  }, [stage, results, params?.id]);
 
   const commitToBlockchain = async () => {
     if (!results || !params.id) return;
@@ -423,9 +481,9 @@ function WorkflowResults({ results, stage, activeTab = 0, workflow = null }) {
 
           {/* 3D Protein Structure Visualization */}
           <Box sx={{ mt: 4, mb: 3 }}>
-            <ProteinViewer3D 
+            <ProteinViewer 
               workflowId={params?.id} 
-              stage="structure" 
+              pdbData={null} // Will be fetched by the component
             />
           </Box>
 
@@ -557,11 +615,45 @@ function WorkflowResults({ results, stage, activeTab = 0, workflow = null }) {
 
         {/* 3D Protein Structure with Binding Sites */}
         <Paper sx={{ p: 3, mb: 4, borderRadius: 2 }}>
-          <ProteinViewer3D 
-            workflowId={params?.id} 
-            stage="binding_sites" 
-            bindingSites={bindingSites}
-          />
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            Binding Site Visualization
+          </Typography>
+          
+          {/* 3D Viewer Container */}
+          <Box sx={{ position: 'relative', height: '600px', border: '1px solid #ddd', borderRadius: 1, mb: 3 }}>
+            <div 
+              id={`molviewer-${params?.id}`} 
+              style={{ width: '100%', height: '100%', position: 'relative' }}
+            >
+              <Box 
+                sx={{ 
+                  position: 'absolute', 
+                  top: '50%', 
+                  left: '50%', 
+                  transform: 'translate(-50%, -50%)',
+                  textAlign: 'center',
+                  zIndex: 1
+                }}
+              >
+                <CircularProgress />
+                <Typography variant="body2" sx={{ mt: 1 }}>Loading 3D structure...</Typography>
+              </Box>
+            </div>
+          </Box>
+          
+          {/* Simple Controls */}
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button 
+              variant="outlined" 
+              size="small" 
+              onClick={() => window.location.reload()}
+            >
+              Refresh Viewer
+            </Button>
+            <Typography variant="body2" color="text.secondary">
+              Protein structure with binding sites highlighted in red
+            </Typography>
+          </Box>
         </Paper>
 
         <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', mb: 2 }}>

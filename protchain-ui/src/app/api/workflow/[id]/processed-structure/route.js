@@ -10,12 +10,14 @@ export async function GET(request, { params }) {
   try {
     // Try multiple possible paths to find the processed PDB file
     const possiblePaths = [
-      // Path relative to the Next.js app directory
+      // Current project structure: root uploads directory
+      path.join(process.cwd(), '..', 'uploads', id, 'processed.pdb'),
+      // Alternative: check for original PDB file
+      path.join(process.cwd(), '..', 'uploads', id, `${id}.pdb`),
+      // Legacy paths for backward compatibility
       path.join(process.cwd(), '..', 'uploads', 'structures', id, 'processed.pdb'),
-      // Absolute path (in case the relative path doesn't work)
-      path.join('c:', 'Users', 'NSL', 'Downloads', 'prot-chain', 'uploads', 'structures', id, 'processed.pdb'),
-      // Try with different casing
-      path.join(process.cwd(), '..', 'Uploads', 'Structures', id, 'processed.pdb'),
+      path.join('c:', 'Users', 'Xavie', 'CascadeProjects', 'prot-chain-monorepo', 'uploads', id, 'processed.pdb'),
+      path.join('c:', 'Users', 'Xavie', 'CascadeProjects', 'prot-chain-monorepo', 'uploads', id, `${id}.pdb`),
     ];
     
     let pdbContent = null;

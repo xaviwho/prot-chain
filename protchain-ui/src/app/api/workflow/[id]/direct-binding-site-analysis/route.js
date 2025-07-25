@@ -49,9 +49,6 @@ export async function POST(request, { params }) {
     const bioApiResult = await bioApiResponse.json();
     console.log('REAL bioapi binding site analysis result:', bioApiResult);
     
-    // Wait for bioapi to complete processing
-    await new Promise(resolve => setTimeout(resolve, 5000));
-    
     // The bioapi returns results directly in the response, not in a file
     // Check if bioapi result already contains binding sites
     if (bioApiResult && bioApiResult.binding_sites) {
@@ -65,33 +62,50 @@ export async function POST(request, { params }) {
       });
     }
     
-    // Also try reading from results file as backup
+    // Implement polling for long-running analysis (large proteins take time)
+    console.log('Bioapi started analysis, polling for results...');
     const resultsPath = path.join(uploadsDir, 'results.json');
     let bindingSiteResults = null;
+    let attempts = 0;
+    const maxAttempts = 20; // Poll for up to 2 minutes (20 * 6 seconds)
     
-    if (fs.existsSync(resultsPath)) {
-      try {
-        const resultsData = JSON.parse(fs.readFileSync(resultsPath, 'utf8'));
-        bindingSiteResults = resultsData.binding_site_analysis;
-        console.log('Found REAL binding site results in file:', bindingSiteResults);
-      } catch (error) {
-        console.error('Error reading binding site results:', error);
+    while (attempts < maxAttempts && !bindingSiteResults) {
+      attempts++;
+      console.log(`Polling attempt ${attempts}/${maxAttempts} for binding site results...`);
+      
+      // Wait 6 seconds between polls
+      await new Promise(resolve => setTimeout(resolve, 6000));
+      
+      // Check if results file exists and has binding site data
+      if (fs.existsSync(resultsPath)) {
+        try {
+          const resultsData = JSON.parse(fs.readFileSync(resultsPath, 'utf8'));
+          if (resultsData.binding_site_analysis && resultsData.binding_site_analysis.binding_sites) {
+            bindingSiteResults = resultsData.binding_site_analysis;
+            console.log('Found REAL binding site results in file:', bindingSiteResults);
+            break;
+          }
+        } catch (error) {
+          console.error('Error reading binding site results:', error);
+        }
       }
     }
     
-    // Return real binding site analysis results from file
+    // Return real binding site analysis results
     if (bindingSiteResults && bindingSiteResults.binding_sites) {
       return NextResponse.json({
         status: 'success',
         message: 'REAL binding site analysis completed successfully',
         binding_sites: bindingSiteResults.binding_sites,
-        method: bindingSiteResults.method || 'real_geometric_cavity_detection'
+        method: bindingSiteResults.method || 'real_geometric_cavity_detection',
+        protein_atoms_count: bindingSiteResults.protein_atoms_count
       });
     } else {
       return NextResponse.json({ 
-        error: 'Binding site analysis failed or no results found',
+        error: 'Binding site analysis timed out or no results found',
         debug_info: {
           bioapi_response: bioApiResult,
+          polling_attempts: attempts,
           results_file_exists: fs.existsSync(resultsPath),
           uploads_dir: uploadsDir
         }

@@ -216,14 +216,26 @@ export default function WorkflowsPage() {
   };
 
   const getStageProgress = (workflow) => {
-    // Mock progress based on workflow age or name patterns
-    const created = new Date(workflow.created_at);
-    const now = new Date();
-    const ageHours = (now - created) / (1000 * 60 * 60);
+    // Calculate REAL progress based on completed stages
+    const completedStages = workflow.completed_stages || [];
+    const totalStages = 5; // structure_preparation, binding_site_analysis, virtual_screening, molecular_dynamics, results_analysis
     
-    if (ageHours > 24) return { stage: 'Binding Site Analysis', progress: 40, color: 'success' };
-    if (ageHours > 12) return { stage: 'Structure Analysis', progress: 20, color: 'success' };
-    return { stage: 'Initializing', progress: 0, color: 'default' };
+    const progress = Math.round((completedStages.length / totalStages) * 100);
+    
+    // Determine current stage based on completed stages
+    if (completedStages.includes('results_analysis')) {
+      return { stage: 'Complete', progress: 100, color: 'success' };
+    } else if (completedStages.includes('molecular_dynamics')) {
+      return { stage: 'Results Analysis', progress: 80, color: 'info' };
+    } else if (completedStages.includes('virtual_screening')) {
+      return { stage: 'Molecular Dynamics', progress: 60, color: 'info' };
+    } else if (completedStages.includes('binding_site_analysis')) {
+      return { stage: 'Virtual Screening', progress: 40, color: 'info' };
+    } else if (completedStages.includes('structure_preparation')) {
+      return { stage: 'Binding Site Analysis', progress: 20, color: 'info' };
+    } else {
+      return { stage: 'Structure Preparation', progress: 0, color: 'default' };
+    }
   };
 
   const renderWorkflowCard = (workflow) => {
